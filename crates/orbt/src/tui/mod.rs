@@ -220,6 +220,10 @@ pub fn render(frame: &mut Frame, app: &App) {
         widgets::eclipse_modal::render(frame, area, app);
     }
 
+    if app.agent_detail_modal.is_some() {
+        widgets::agent_detail_modal::render(frame, area, app);
+    }
+
     if app.settings_open {
         widgets::settings_modal::render(frame, area, app);
     }
@@ -266,6 +270,11 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             if app.eclipse_modal.is_some() {
                 widgets::eclipse_modal::render(frame, content_area, app);
             }
+
+            if app.agent_detail_modal.is_some() {
+                widgets::agent_detail_modal::render(frame, content_area, app);
+            }
+
             if app.settings_open {
                 widgets::settings_modal::render(frame, content_area, app);
             }
@@ -284,6 +293,9 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             }
             if app.launch_modal.is_some() {
                 widgets::launch_modal::render(frame, content_area, app);
+            }
+            if app.agent_detail_modal.is_some() {
+                widgets::agent_detail_modal::render(frame, content_area, app);
             }
         }
         MobileView::Windows => {
