@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 3;
+pub const PROTOCOL_VERSION: u32 = 4; // was 3; AgentDetail gained `acp` field
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -157,6 +157,10 @@ pub enum ServerEvent {
     },
     AgentCreated(crate::AgentInfo),
     AgentRemoved(crate::AgentId),
+    AgentAcpUpdated {
+        agent_id: crate::AgentId,
+        data: crate::AcpDetail,
+    },
     AgentMetricsUpdated {
         agent_id: crate::AgentId,
         metrics: crate::AgentMetrics,

@@ -39,6 +39,56 @@ pub struct AgentDetail {
     pub block_msg: Option<String>,
     pub progress: Option<f32>,
     pub duration_s: u32,
+    /// Populated only for ACP-connected agents.
+    #[serde(default)]
+    pub acp: Option<AcpDetail>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolCallStatus {
+    Running,
+    Done,
+    Error,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolCall {
+    pub id: u32,
+    /// Tool name as reported by the agent, e.g. "Bash", "Read", "Write".
+    pub tool: String,
+    /// Args truncated to <=60 chars by the daemon.
+    pub args_summary: String,
+    pub status: ToolCallStatus,
+    /// Wall-clock duration in ms; None while Running.
+    pub duration_ms: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FileKind {
+    Read,
+    Modified,
+    Created,
+    Deleted,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileTouched {
+    pub path: String,
+    pub kind: FileKind,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct AcpDetail {
+    /// Tool call currently executing, if any.
+    pub current_tool: Option<ToolCall>,
+    /// Last <=20 completed calls, newest-first.
+    pub recent_tools: Vec<ToolCall>,
+    /// Running total including evicted calls.
+    pub total_tool_calls: u32,
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    /// Deduplicated, newest-first, capped at 20.
+    pub files_touched: Vec<FileTouched>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -331,6 +381,50 @@ pub struct ScrollbackLine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn acp_detail_bincode_roundtrip() {
+        use bincode::{
+            config::standard,
+            serde::{decode_from_slice, encode_to_vec},
+        };
+        let detail = AgentDetail {
+            task: Some("impl auth".into()),
+            block_msg: None,
+            progress: Some(0.7),
+            duration_s: 120,
+            acp: Some(AcpDetail {
+                current_tool: Some(ToolCall {
+                    id: 3,
+                    tool: "Bash".into(),
+                    args_summary: "cargo test".into(),
+                    status: ToolCallStatus::Running,
+                    duration_ms: None,
+                }),
+                recent_tools: vec![ToolCall {
+                    id: 2,
+                    tool: "Read".into(),
+                    args_summary: "src/lib.rs".into(),
+                    status: ToolCallStatus::Done,
+                    duration_ms: Some(50),
+                }],
+                total_tool_calls: 3,
+                tokens_in: 14_203,
+                tokens_out: 8_441,
+                files_touched: vec![FileTouched {
+                    path: "src/lib.rs".into(),
+                    kind: FileKind::Modified,
+                }],
+            }),
+        };
+        let bytes = encode_to_vec(&detail, standard()).unwrap();
+        let (decoded, _): (AgentDetail, usize) = decode_from_slice(&bytes, standard()).unwrap();
+        assert_eq!(decoded.duration_s, 120);
+        let acp = decoded.acp.unwrap();
+        assert_eq!(acp.tokens_in, 14_203);
+        assert_eq!(acp.files_touched[0].kind, FileKind::Modified);
+        assert_eq!(acp.current_tool.unwrap().status, ToolCallStatus::Running);
+    }
 
     #[test]
     fn set_split_ratio_simple_split() {

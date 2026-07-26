@@ -18,7 +18,8 @@ pub use error::ProtocolError;
 pub use messages::{Capabilities, ClientMessage, ServerEvent, PROTOCOL_VERSION};
 pub use socket::default_socket_path;
 pub use types::{
-    AgentDetail, AgentId, AgentInfo, AgentLaunchRequest, AgentMetrics, AgentProtocol, AgentStatus,
-    Cell, CellFlags, CellGrid, FullState, ImageId, PaneId, PaneInfo, PaneLayout, ScrollbackLine,
-    SpaceId, SpaceInfo, SplitDir, TabId, TabInfo, TermColor,
+    AcpDetail, AgentDetail, AgentId, AgentInfo, AgentLaunchRequest, AgentMetrics, AgentProtocol,
+    AgentStatus, Cell, CellFlags, CellGrid, FileKind, FileTouched, FullState, ImageId, PaneId,
+    PaneInfo, PaneLayout, ScrollbackLine, SpaceId, SpaceInfo, SplitDir, TabId, TabInfo, TermColor,
+    ToolCall, ToolCallStatus,
 };
