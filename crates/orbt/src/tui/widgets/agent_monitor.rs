@@ -358,7 +358,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let visible_agents: Vec<&AgentInfo> =
             app.agents.iter().skip(app.agent_scroll_offset).collect();
         let total = app.agents.len();
-        // Reserve 1 row at the bottom for the "[+] Add Satellite" footer.
+        // Reserve 1 row at the bottom for the "[+] Add Agent" footer.
         let content_bottom = area.y + area.height.saturating_sub(1);
         for (card_idx, agent) in visible_agents.iter().enumerate() {
             if y + 5 > content_bottom {

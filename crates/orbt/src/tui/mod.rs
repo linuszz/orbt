@@ -282,6 +282,9 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             if app.eclipse_modal.is_some() {
                 widgets::eclipse_modal::render(frame, content_area, app);
             }
+            if app.launch_modal.is_some() {
+                widgets::launch_modal::render(frame, content_area, app);
+            }
         }
         MobileView::Windows => {
             widgets::mobile_spaces::render(frame, content_area, app);

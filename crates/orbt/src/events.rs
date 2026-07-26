@@ -555,6 +555,10 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                     app.needs_redraw = true;
                     true
                 }
+                KeyCode::Char('n') => {
+                    orbt_tui::tui::widgets::launch_modal::open(app);
+                    true
+                }
                 KeyCode::Esc | KeyCode::Char('q') => {
                     app.mobile_view = MobileView::Terminal;
                     app.mode = InputMode::Normal;
@@ -1038,7 +1042,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         }
                     }
                 }
-                // n: open Launch Satellite picker (new satellite)
+                // n: open Launch Agent picker
                 KeyCode::Char('n') => {
                     orbt_tui::tui::widgets::launch_modal::open(app);
                 }
@@ -1606,8 +1610,12 @@ async fn handle_mobile_mouse(
                         }
                     }
                     MobileView::Agents => {
-                        // Simple: click opens Eclipse modal for blocked agents.
-                        // Full agent card interaction is handled by enter key.
+                        // Footer row ("[+] Add Agent") is pinned to the last content row.
+                        let content_h = nav_row.saturating_sub(1);
+                        let footer_row = 1u16 + content_h.saturating_sub(1);
+                        if mouse.row == footer_row {
+                            orbt_tui::tui::widgets::launch_modal::open(app);
+                        }
                     }
                     MobileView::Windows => {
                         use orbt_tui::tui::widgets::mobile_confirm::{
@@ -2122,7 +2130,7 @@ async fn handle_mouse(
                     if mouse.column >= term_w.saturating_sub(4)
                         && mouse.column <= term_w.saturating_sub(2)
                     {
-                        // [+] add — open the Launch Satellite picker overlay
+                        // [+] add — open the Launch Agent picker overlay
                         orbt_tui::tui::widgets::launch_modal::open(app);
                         return;
                     }
