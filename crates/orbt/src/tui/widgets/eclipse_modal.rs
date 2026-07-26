@@ -39,7 +39,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Clear background and draw outer block.
     frame.render_widget(Clear, modal_area);
     let title = format!(
-        " \u{25CE} Satellite Eclipse — {} ",
+        " \u{25CE} Agent Eclipse — {} ",
         truncate_str(&modal.agent_name, 20)
     );
     let block = Block::default()

@@ -1291,10 +1291,17 @@ async fn do_launch(app: &mut App, writer: &IpcWriter) {
     let Some(modal) = &app.launch_modal else {
         return;
     };
-    let name = orbt_tui::app::LAUNCH_AGENTS
-        .get(modal.selected)
-        .map(|(cmd, _)| cmd.to_string())
+    let cmd = orbt_tui::app::LAUNCH_AGENTS
+        .get(modal.selected_agent)
+        .map(|(cmd, _, _)| cmd.to_string())
         .unwrap_or_else(|| "claude".to_string());
+    let name = modal.name.trim().to_string();
+    let model = modal.model.trim().to_string();
+    let cwd = if modal.cwd.trim().is_empty() {
+        app.space_path.clone()
+    } else {
+        modal.cwd.trim().to_string()
+    };
     let space_id = app
         .spaces
         .get(app.active_space_idx)
@@ -1304,9 +1311,9 @@ async fn do_launch(app: &mut App, writer: &IpcWriter) {
     let _ = writer
         .send(ClientMessage::AgentLaunch {
             config: orbt_protocol::AgentLaunchRequest {
-                name,
-                model: String::new(),
-                cwd: app.space_path.clone(),
+                name: if name.is_empty() { cmd.clone() } else { name },
+                model,
+                cwd,
                 space_id,
             },
         })
@@ -1315,10 +1322,13 @@ async fn do_launch(app: &mut App, writer: &IpcWriter) {
 }
 
 async fn handle_launch_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
+    use orbt_tui::app::LaunchFocus;
     let Some(modal) = &app.launch_modal else {
         return;
     };
     let n = orbt_tui::app::LAUNCH_AGENTS.len();
+    let focus = modal.focus;
+
     match key.code {
         KeyCode::Esc => {
             app.launch_modal = None;
@@ -1327,17 +1337,55 @@ async fn handle_launch_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
         KeyCode::Enter => {
             do_launch(app, writer).await;
         }
-        KeyCode::Up => {
-            let sel = modal.selected;
+        // Tab / Shift-Tab cycle focus between the 4 sections
+        KeyCode::Tab => {
             if let Some(m) = &mut app.launch_modal {
-                m.selected = if sel == 0 { n - 1 } else { sel - 1 };
+                m.focus = m.focus.next();
             }
             app.needs_redraw = true;
         }
-        KeyCode::Down => {
-            let sel = modal.selected;
+        KeyCode::BackTab => {
             if let Some(m) = &mut app.launch_modal {
-                m.selected = (sel + 1) % n;
+                m.focus = m.focus.prev();
+            }
+            app.needs_redraw = true;
+        }
+        // Arrow keys only navigate the agent list when that section is focused
+        KeyCode::Up if focus == LaunchFocus::AgentList => {
+            let sel = modal.selected_agent;
+            if let Some(m) = &mut app.launch_modal {
+                m.selected_agent = if sel == 0 { n - 1 } else { sel - 1 };
+            }
+            app.needs_redraw = true;
+        }
+        KeyCode::Down if focus == LaunchFocus::AgentList => {
+            let sel = modal.selected_agent;
+            if let Some(m) = &mut app.launch_modal {
+                m.selected_agent = (sel + 1) % n;
+            }
+            app.needs_redraw = true;
+        }
+        // Backspace: delete last char from focused text field
+        KeyCode::Backspace => {
+            if let Some(m) = &mut app.launch_modal {
+                match m.focus {
+                    LaunchFocus::Name  => { m.name.pop(); }
+                    LaunchFocus::Model => { m.model.pop(); }
+                    LaunchFocus::Cwd   => { m.cwd.pop(); }
+                    LaunchFocus::AgentList => {}
+                }
+            }
+            app.needs_redraw = true;
+        }
+        // Printable chars: append to focused text field
+        KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+            if let Some(m) = &mut app.launch_modal {
+                match m.focus {
+                    LaunchFocus::Name  => m.name.push(c),
+                    LaunchFocus::Model => m.model.push(c),
+                    LaunchFocus::Cwd   => m.cwd.push(c),
+                    LaunchFocus::AgentList => {}
+                }
             }
             app.needs_redraw = true;
         }
@@ -1348,20 +1396,21 @@ async fn handle_launch_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
 async fn handle_launch_modal_mouse(
     mouse: crossterm::event::MouseEvent,
     app: &mut App,
-    writer: &IpcWriter,
+    _writer: &IpcWriter,
     term_size: ratatui::layout::Rect,
 ) {
+    use orbt_tui::app::LaunchFocus;
+    use orbt_tui::tui::widgets::launch_modal::{MODAL_H, MODAL_W};
+
     if mouse.kind != MouseEventKind::Down(MouseButton::Left) {
         return;
     }
     let Some(_modal) = &app.launch_modal else {
         return;
     };
-    // Mirror geometry from launch_modal::render.
-    let n = orbt_tui::app::LAUNCH_AGENTS.len() as u16;
-    let modal_h = (n + 6).min(term_size.height.saturating_sub(4));
-    let modal_w =
-        orbt_tui::tui::widgets::launch_modal::MODAL_W.min(term_size.width.saturating_sub(4));
+
+    let modal_w = MODAL_W.min(term_size.width.saturating_sub(4));
+    let modal_h = MODAL_H.min(term_size.height.saturating_sub(4));
     let modal_x = (term_size.width.saturating_sub(modal_w)) / 2;
     let modal_y = (term_size.height.saturating_sub(modal_h)) / 2;
 
@@ -1376,31 +1425,37 @@ async fn handle_launch_modal_mouse(
         return;
     }
 
-    let inner_x = modal_x + 1;
-    // Agent rows start at modal_y+3 (border + blank + "Agent:" label).
+    let n = orbt_tui::app::LAUNCH_AGENTS.len() as u16;
+    // Agent list box: rows modal_y+3 .. modal_y+3+n  (border+label+box-border = 3 offset; +1 inner start)
     let agents_start = modal_y + 3;
     let agents_end = agents_start + n;
-    let btn_row = modal_y + modal_h.saturating_sub(2);
 
     if mouse.row >= agents_start && mouse.row < agents_end {
-        // Click on an agent row — select and launch immediately.
         let idx = (mouse.row - agents_start) as usize;
         if let Some(m) = &mut app.launch_modal {
-            m.selected = idx;
+            m.selected_agent = idx;
+            m.focus = LaunchFocus::AgentList;
         }
-        do_launch(app, writer).await;
+        app.needs_redraw = true;
         return;
     }
 
-    if mouse.row == btn_row {
-        let col_in = mouse.column.saturating_sub(inner_x);
-        if (1..=8).contains(&col_in) {
-            // [Launch]
-            do_launch(app, writer).await;
-        } else if (11..=18).contains(&col_in) {
-            // [Cancel]
-            app.launch_modal = None;
+    // Name field inner row: modal_y + 3+n+2 + 1 (box border) + 1 (label) + 1 (box top) = agents_end+4
+    let name_row = agents_end + 4;
+    let model_row = name_row + 4;
+    let cwd_row = model_row + 4;
+
+    for (field_row, focus) in [
+        (name_row, LaunchFocus::Name),
+        (model_row, LaunchFocus::Model),
+        (cwd_row, LaunchFocus::Cwd),
+    ] {
+        if mouse.row >= field_row.saturating_sub(2) && mouse.row <= field_row + 1 {
+            if let Some(m) = &mut app.launch_modal {
+                m.focus = focus;
+            }
             app.needs_redraw = true;
+            return;
         }
     }
 }

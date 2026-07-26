@@ -174,17 +174,54 @@ pub struct Selection {
     pub active: bool,
 }
 
-/// Known agent types the user can launch from the Launch Satellite overlay.
-pub const LAUNCH_AGENTS: &[(&str, &str)] = &[
-    ("claude", "Claude Code"),
-    ("codex", "Codex (Copilot)"),
-    ("aider", "Aider"),
+/// Known agent types the user can launch from the Launch Agent overlay.
+/// Fields: (command, display_name, acp_capable)
+pub const LAUNCH_AGENTS: &[(&str, &str, bool)] = &[
+    ("claude",    "Claude Code",   false),
+    ("opencode",  "OpenCode AI",   true),
+    ("codex-cli", "Codex CLI",     true),
+    ("gemini",    "Gemini CLI",    true),
+    ("aider",     "Aider",         false),
+    ("cline",     "Cline",         true),
 ];
 
-/// State for the "Launch Satellite" agent picker overlay.
+/// Which field has keyboard focus in the Launch Agent modal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LaunchFocus {
+    #[default]
+    AgentList,
+    Name,
+    Model,
+    Cwd,
+}
+
+impl LaunchFocus {
+    pub fn next(self) -> Self {
+        match self {
+            Self::AgentList => Self::Name,
+            Self::Name => Self::Model,
+            Self::Model => Self::Cwd,
+            Self::Cwd => Self::AgentList,
+        }
+    }
+    pub fn prev(self) -> Self {
+        match self {
+            Self::AgentList => Self::Cwd,
+            Self::Name => Self::AgentList,
+            Self::Model => Self::Name,
+            Self::Cwd => Self::Model,
+        }
+    }
+}
+
+/// State for the "Launch Agent" configuration overlay.
 #[derive(Debug, Clone)]
 pub struct LaunchModalState {
-    pub selected: usize,
+    pub selected_agent: usize,
+    pub focus: LaunchFocus,
+    pub name: String,
+    pub model: String,
+    pub cwd: String,
 }
 
 /// State for the Satellite Eclipse intervention modal.

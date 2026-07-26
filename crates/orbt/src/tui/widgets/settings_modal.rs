@@ -95,11 +95,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         );
     }
 
-    // --- Satellites section (read-only) ---
+    // --- Agents section (read-only) ---
     let sat_header_y = inner.y + 5;
     if sat_header_y < inner.y + inner.height.saturating_sub(2) {
-        // "── Satellites ──────" divider
-        let header_label = "\u{2500}\u{2500} Satellites ";
+        // "── Agents ──────" divider
+        let header_label = "\u{2500}\u{2500} Agents ";
         let fill = (inner.width as usize).saturating_sub(header_label.len());
         let header_str = format!("{}{}", header_label, "\u{2500}".repeat(fill));
         frame.render_widget(
@@ -108,20 +108,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         );
 
         let sat_start_y = sat_header_y + 1;
-        let sat_max_rows = (inner.y + inner.height).saturating_sub(sat_start_y + 1);
+        // Leave 1 row for possible overflow indicator + 1 for footer
+        let sat_max_rows = (inner.y + inner.height).saturating_sub(sat_start_y + 2);
 
         if app.agents.is_empty() {
             if sat_start_y < inner.y + inner.height.saturating_sub(1) {
                 frame.render_widget(
                     Line::from(Span::styled(
-                        "  No satellites detected",
+                        "  No agents detected",
                         Style::default().fg(fg_muted()),
                     )),
                     Rect { x: inner.x, y: sat_start_y, width: inner.width, height: 1 },
                 );
             }
         } else {
-            for (i, agent) in app.agents.iter().take(sat_max_rows as usize).enumerate() {
+            let visible = sat_max_rows as usize;
+            let total = app.agents.len();
+            for (i, agent) in app.agents.iter().take(visible).enumerate() {
                 let row_y = sat_start_y + i as u16;
                 let icon = status_icon(&agent.status);
                 let slabel = status_label(&agent.status);
@@ -169,6 +172,20 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                     ]),
                     Rect { x: inner.x, y: row_y, width: inner.width, height: 1 },
                 );
+            }
+            // Overflow indicator when agents don't all fit
+            if total > visible {
+                let more = total - visible;
+                let overflow_y = sat_start_y + visible as u16;
+                if overflow_y < inner.y + inner.height.saturating_sub(1) {
+                    frame.render_widget(
+                        Line::from(Span::styled(
+                            format!("  \u{25BE} {more} more"),
+                            Style::default().fg(fg_muted()),
+                        )),
+                        Rect { x: inner.x, y: overflow_y, width: inner.width, height: 1 },
+                    );
+                }
             }
         }
     }

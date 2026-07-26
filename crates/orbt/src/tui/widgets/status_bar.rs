@@ -40,7 +40,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     if matches!(app.mode, InputMode::AgentPanel { .. }) {
         spans.push(Span::styled(
-            " SATELLITE NAV ",
+            " AGENT NAV ",
             Style::default()
                 .fg(bg_primary())
                 .bg(accent())
@@ -73,7 +73,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     ));
     spans.push(Span::styled(" | ", Style::default().fg(border())));
 
-    // Live satellite fleet summary — highest-severity status wins.
+    // Live agent fleet summary — highest-severity status wins.
     let n_blocked = app
         .agents
         .iter()

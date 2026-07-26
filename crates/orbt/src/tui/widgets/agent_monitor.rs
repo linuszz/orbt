@@ -342,7 +342,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             if mid_y + 1 < area.y + area.height {
                 frame.render_widget(
                     Paragraph::new(Line::from(Span::styled(
-                        format!("{:^width$}", "No satellites running", width = iw as usize),
+                        format!("{:^width$}", "No agents running", width = iw as usize),
                         Style::default().fg(fg_muted()),
                     ))),
                     Rect {
@@ -708,7 +708,7 @@ fn render_card(
     }
 }
 
-/// Footer: "[+] Add Satellite" pinned to the last row of the agent panel.
+/// Footer: "[+] Add Agent" pinned to the last row of the agent panel.
 fn render_footer(frame: &mut Frame, ix: u16, iw: u16, area: Rect, app: &App) {
     let footer_y = area.y + area.height.saturating_sub(1);
     let (fg, bg) = if app.agent_hovered == Some(AgentHover::PanelFooter) {
@@ -716,7 +716,7 @@ fn render_footer(frame: &mut Frame, ix: u16, iw: u16, area: Rect, app: &App) {
     } else {
         (fg_muted(), bg_secondary())
     };
-    let label = format!("{:<width$}", " [+] Add Satellite", width = iw as usize);
+    let label = format!("{:<width$}", " [+] Add Agent", width = iw as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(label, Style::default().fg(fg).bg(bg))),
         Rect {
@@ -765,7 +765,7 @@ pub fn render_modal(frame: &mut Frame, screen: Rect, app: &App) {
     frame.render_widget(Clear, area);
 
     // Outer border with title.
-    let title = format!(" Satellite Fleet ({}) ", app.agents.len());
+    let title = format!(" Agent Fleet ({}) ", app.agents.len());
     let mode_hint = " [a] close  [Tab] sidebar ";
     let block = Block::default()
         .borders(Borders::ALL)

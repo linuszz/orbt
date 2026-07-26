@@ -335,7 +335,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         ("  n / p", "next / previous window"),
         ("  0-9", "switch to window N"),
         ("  d", "detach (quit, keep session)"),
-        ("  a", "toggle satellite monitor"),
+        ("  a", "toggle agent monitor"),
         ("  b", "toggle sidebar"),
         ("  ?", "this help"),
         ("Scroll: k/j/PgUp/PgDn/g/G/q", ""),
