@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use orbt_core::VtParser;
 use orbt_protocol::{
-    AgentId, AgentInfo, AgentMetrics, AgentStatus, Cell, CellGrid, FullState, PaneId, PaneLayout,
-    ServerEvent, SpaceId, SplitDir, TabId,
+    AgentId, AgentInfo, AgentMetrics, AgentStatus, Cell, CellGrid, FileTouched, FullState,
+    PaneId, PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
 /// Which column has keyboard focus in the mobile SPACES two-column view.
@@ -238,6 +238,26 @@ pub struct EclipseModalState {
     pub cwd: Option<String>,
     /// Wall-clock seconds since agent was blocked (captured at open time).
     pub blocked_duration_s: u32,
+}
+
+#[derive(Debug, Clone)]
+pub struct AgentDetailModalState {
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub status: AgentStatus,
+    pub duration_s: u32,
+    pub model: String,
+    pub cwd: Option<String>,
+    pub task: Option<String>,
+    // ACP fields (zero/empty for heuristic agents)
+    pub tokens_in: u32,
+    pub tokens_out: u32,
+    pub current_tool: Option<ToolCall>,
+    pub recent_tools: Vec<ToolCall>,
+    pub total_tool_calls: u32,
+    pub files_touched: Vec<FileTouched>,
+    // UI scroll state
+    pub tool_scroll: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -476,6 +496,7 @@ pub struct App {
     pub agent_hovered: Option<AgentHover>,
     pub agent_scroll_offset: usize,
     pub eclipse_modal: Option<EclipseModalState>,
+    pub agent_detail_modal: Option<AgentDetailModalState>,
     pub launch_modal: Option<LaunchModalState>,
     /// Increments every animation tick (16 ms) while any agent is Working or Blocked.
     pub tick_count: u64,
@@ -662,6 +683,7 @@ impl App {
             agent_hovered: None,
             agent_scroll_offset: 0,
             eclipse_modal: None,
+            agent_detail_modal: None,
             launch_modal: None,
             tick_count: 0,
             drag_tab: None,
