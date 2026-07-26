@@ -65,7 +65,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 /// Render the command palette over `area` without any dim overlay.
 /// Used by mobile COMMAND view — terminal content shows through unchanged.
 pub fn render_mobile(frame: &mut Frame, area: Rect, app: &App) {
-    let no_dim = Rect { x: area.x, y: area.y, width: 0, height: 0 };
+    let no_dim = Rect {
+        x: area.x,
+        y: area.y,
+        width: 0,
+        height: 0,
+    };
     render_inner(frame, area, no_dim, app);
 }
 

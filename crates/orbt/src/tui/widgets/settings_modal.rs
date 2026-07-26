@@ -22,7 +22,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let modal_h = (14 + satellite_rows).min(area.height.saturating_sub(4));
     let x = area.x + area.width.saturating_sub(modal_w) / 2;
     let y = area.y + area.height.saturating_sub(modal_h) / 2;
-    let modal_area = Rect { x, y, width: modal_w, height: modal_h };
+    let modal_area = Rect {
+        x,
+        y,
+        width: modal_w,
+        height: modal_h,
+    };
 
     frame.render_widget(Clear, modal_area);
 
@@ -72,8 +77,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let value = value.as_str();
         let is_selected = i == app.settings_selected;
         let row_y = inner.y + i as u16 + 1;
-        let bg = if is_selected { bg_primary() } else { bg_secondary() };
-        let fg_label = if is_selected { fg_primary() } else { fg_secondary() };
+        let bg = if is_selected {
+            bg_primary()
+        } else {
+            bg_secondary()
+        };
+        let fg_label = if is_selected {
+            fg_primary()
+        } else {
+            fg_secondary()
+        };
         let fg_value = if is_selected { accent() } else { fg_muted() };
         let marker = if is_selected {
             Span::styled("> ", Style::default().fg(accent()))
@@ -91,7 +104,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ]);
         frame.render_widget(
             line,
-            Rect { x: inner.x, y: row_y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: row_y,
+                width: inner.width,
+                height: 1,
+            },
         );
     }
 
@@ -104,7 +122,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let header_str = format!("{}{}", header_label, "\u{2500}".repeat(fill));
         frame.render_widget(
             Line::from(Span::styled(header_str, Style::default().fg(fg_muted()))),
-            Rect { x: inner.x, y: sat_header_y, width: inner.width, height: 1 },
+            Rect {
+                x: inner.x,
+                y: sat_header_y,
+                width: inner.width,
+                height: 1,
+            },
         );
 
         let sat_start_y = sat_header_y + 1;
@@ -118,7 +141,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                         "  No agents detected",
                         Style::default().fg(fg_muted()),
                     )),
-                    Rect { x: inner.x, y: sat_start_y, width: inner.width, height: 1 },
+                    Rect {
+                        x: inner.x,
+                        y: sat_start_y,
+                        width: inner.width,
+                        height: 1,
+                    },
                 );
             }
         } else {
@@ -170,7 +198,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                         Span::styled(" ".repeat(pad), Style::default()),
                         Span::styled(right_part, Style::default().fg(fg_muted())),
                     ]),
-                    Rect { x: inner.x, y: row_y, width: inner.width, height: 1 },
+                    Rect {
+                        x: inner.x,
+                        y: row_y,
+                        width: inner.width,
+                        height: 1,
+                    },
                 );
             }
             // Overflow indicator when agents don't all fit
@@ -183,7 +216,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                             format!("  \u{25BE} {more} more"),
                             Style::default().fg(fg_muted()),
                         )),
-                        Rect { x: inner.x, y: overflow_y, width: inner.width, height: 1 },
+                        Rect {
+                            x: inner.x,
+                            y: overflow_y,
+                            width: inner.width,
+                            height: 1,
+                        },
                     );
                 }
             }
@@ -201,6 +239,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     ]);
     frame.render_widget(
         footer,
-        Rect { x: inner.x, y: footer_y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y: footer_y,
+            width: inner.width,
+            height: 1,
+        },
     );
 }

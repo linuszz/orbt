@@ -124,7 +124,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 "\u{2502}",
                 Style::default().fg(border()),
             ))),
-            Rect { x: sep_x, y: area.y + dy, width: 1, height: 1 },
+            Rect {
+                x: sep_x,
+                y: area.y + dy,
+                width: 1,
+                height: 1,
+            },
         );
     }
 
@@ -163,10 +168,22 @@ fn render_space_column(
                 .iter()
                 .filter(|a| a.space_id == space.space_id)
                 .collect();
-            let n_blocked = space_agents.iter().filter(|a| a.status == AgentStatus::Blocked).count();
-            let n_error   = space_agents.iter().filter(|a| a.status == AgentStatus::Error).count();
-            let n_working = space_agents.iter().filter(|a| a.status == AgentStatus::Working).count();
-            let n_idle    = space_agents.iter().filter(|a| a.status == AgentStatus::Idle).count();
+            let n_blocked = space_agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Blocked)
+                .count();
+            let n_error = space_agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Error)
+                .count();
+            let n_working = space_agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Working)
+                .count();
+            let n_idle = space_agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Idle)
+                .count();
 
             let (row0_bg, row0_fg, row0_mod) = if is_cursor || is_active {
                 (accent(), bg_primary(), Modifier::BOLD)
@@ -201,7 +218,12 @@ fn render_space_column(
                     ),
                     Span::styled(close_str, Style::default().fg(row0_fg).bg(row0_bg)),
                 ])),
-                Rect { x, y: card_y, width: w, height: 1 },
+                Rect {
+                    x,
+                    y: card_y,
+                    width: w,
+                    height: 1,
+                },
             );
 
             // Row 1: cwd last component
@@ -212,19 +234,31 @@ fn render_space_column(
                 .filter(|s| !s.is_empty())
                 .unwrap_or(&space.cwd);
             let cwd_trunc = truncate(cwd_last, (w as usize).saturating_sub(1));
-            let cwd_fill = format!(" {:<fill$}", cwd_trunc, fill = (w as usize).saturating_sub(1));
+            let cwd_fill = format!(
+                " {:<fill$}",
+                cwd_trunc,
+                fill = (w as usize).saturating_sub(1)
+            );
             frame.render_widget(
                 Paragraph::new(Line::from(Span::styled(
                     cwd_fill,
                     Style::default().fg(row12_fg).bg(row12_bg),
                 ))),
-                Rect { x, y: card_y + 1, width: w, height: 1 },
+                Rect {
+                    x,
+                    y: card_y + 1,
+                    width: w,
+                    height: 1,
+                },
             );
 
             // Row 2: "Nt Np Na" stats + priority state dot after the count
             let agent_count = space_agents.len();
             let base_stats = if agent_count > 0 {
-                format!(" {}t {}p {}a", space.tab_count, space.pane_count, agent_count)
+                format!(
+                    " {}t {}p {}a",
+                    space.tab_count, space.pane_count, agent_count
+                )
             } else {
                 format!(" {}t {}p", space.tab_count, space.pane_count)
             };
@@ -255,19 +289,29 @@ fn render_space_column(
             }
             let pad = (w as usize).saturating_sub(char_count);
             if pad > 0 {
-                stat_spans.push(Span::styled(
-                    " ".repeat(pad),
-                    Style::default().bg(row12_bg),
-                ));
+                stat_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(row12_bg)));
             }
             frame.render_widget(
                 Paragraph::new(Line::from(stat_spans)),
-                Rect { x, y: card_y + 2, width: w, height: 1 },
+                Rect {
+                    x,
+                    y: card_y + 2,
+                    width: w,
+                    height: 1,
+                },
             );
         } else if idx == n {
             // "+Space" action button spanning SPACE_CARD_H rows
             let is_cursor = focused && idx == app.mobile_spaces_cursor;
-            render_action_card(frame, x, card_y, w, SPACE_CARD_H as u16, "+Space", is_cursor);
+            render_action_card(
+                frame,
+                x,
+                card_y,
+                w,
+                SPACE_CARD_H as u16,
+                "+Space",
+                is_cursor,
+            );
         } else {
             // Fill remaining rows with bg_primary
             for dr in 0..SPACE_CARD_H as u16 {
@@ -276,21 +320,19 @@ fn render_space_column(
                         " ".repeat(w as usize),
                         Style::default().bg(bg_primary()),
                     ))),
-                    Rect { x, y: card_y + dr, width: w, height: 1 },
+                    Rect {
+                        x,
+                        y: card_y + dr,
+                        width: w,
+                        height: 1,
+                    },
                 );
             }
         }
     }
 }
 
-fn render_tab_column(
-    frame: &mut Frame,
-    x: u16,
-    base_y: u16,
-    w: u16,
-    content_h: usize,
-    app: &App,
-) {
+fn render_tab_column(frame: &mut Frame, x: u16, base_y: u16, w: u16, content_h: usize, app: &App) {
     let n = app.tabs.len();
     let visible = content_h / TAB_CARD_H;
     let offset = scroll_offset(app.mobile_tabs_cursor, visible);
@@ -331,14 +373,16 @@ fn render_tab_column(
                     Span::styled(marker, Style::default().fg(marker_fg).bg(bg)),
                     Span::styled(
                         name_fill,
-                        Style::default()
-                            .fg(text_fg)
-                            .bg(bg)
-                            .add_modifier(extra_mod),
+                        Style::default().fg(text_fg).bg(bg).add_modifier(extra_mod),
                     ),
                     Span::styled(close_str, Style::default().fg(close_fg).bg(bg)),
                 ])),
-                Rect { x, y: card_y, width: w, height: 1 },
+                Rect {
+                    x,
+                    y: card_y,
+                    width: w,
+                    height: 1,
+                },
             );
 
             // Row 1: blank (just tap area)
@@ -347,11 +391,24 @@ fn render_tab_column(
                     " ".repeat(w as usize),
                     Style::default().bg(bg),
                 ))),
-                Rect { x, y: card_y + 1, width: w, height: 1 },
+                Rect {
+                    x,
+                    y: card_y + 1,
+                    width: w,
+                    height: 1,
+                },
             );
         } else if idx == n {
             let is_cursor = focused && idx == app.mobile_tabs_cursor;
-            render_action_card(frame, x, card_y, w, TAB_CARD_H as u16, "+ New Tab", is_cursor);
+            render_action_card(
+                frame,
+                x,
+                card_y,
+                w,
+                TAB_CARD_H as u16,
+                "+ New Tab",
+                is_cursor,
+            );
         } else {
             for dr in 0..TAB_CARD_H as u16 {
                 frame.render_widget(
@@ -359,14 +416,27 @@ fn render_tab_column(
                         " ".repeat(w as usize),
                         Style::default().bg(bg_primary()),
                     ))),
-                    Rect { x, y: card_y + dr, width: w, height: 1 },
+                    Rect {
+                        x,
+                        y: card_y + dr,
+                        width: w,
+                        height: 1,
+                    },
                 );
             }
         }
     }
 }
 
-fn render_action_card(frame: &mut Frame, x: u16, y: u16, w: u16, h: u16, label: &str, is_cursor: bool) {
+fn render_action_card(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    w: u16,
+    h: u16,
+    label: &str,
+    is_cursor: bool,
+) {
     let (fg, bg) = if is_cursor {
         (bg_primary(), accent())
     } else {
@@ -379,7 +449,12 @@ fn render_action_card(frame: &mut Frame, x: u16, y: u16, w: u16, h: u16, label: 
             text,
             Style::default().fg(fg).bg(bg),
         ))),
-        Rect { x, y, width: w, height: 1 },
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
     );
     // Remaining rows: blank (same bg)
     for dr in 1..h {
@@ -388,7 +463,12 @@ fn render_action_card(frame: &mut Frame, x: u16, y: u16, w: u16, h: u16, label: 
                 " ".repeat(w as usize),
                 Style::default().bg(bg),
             ))),
-            Rect { x, y: y + dr, width: w, height: 1 },
+            Rect {
+                x,
+                y: y + dr,
+                width: w,
+                height: 1,
+            },
         );
     }
 }

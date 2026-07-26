@@ -72,8 +72,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                     let label_span = Span::styled(format!(" {label}"), label_style);
                     let mut spans = vec![label_span];
                     if !shortcut.is_empty() {
-                        let pad = inner_w
-                            .saturating_sub(label.len() + shortcut.len() + 3);
+                        let pad = inner_w.saturating_sub(label.len() + shortcut.len() + 3);
                         spans.push(Span::styled(" ".repeat(pad), Style::default().bg(bg)));
                         spans.push(Span::styled(shortcut.clone(), shortcut_style));
                     }

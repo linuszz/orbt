@@ -35,7 +35,12 @@ const SCRIPT_RUNNERS: &[&str] = &["node", "npx", "python", "python3", "deno", "b
 /// When detected, these are marked AcpCapable rather than Heuristic.
 #[cfg(target_os = "linux")]
 const ACP_CAPABLE_AGENTS: &[&str] = &[
-    "opencode", "gemini", "gemini-cli", "codex", "codex-cli", "cline",
+    "opencode",
+    "gemini",
+    "gemini-cli",
+    "codex",
+    "codex-cli",
+    "cline",
 ];
 
 /// Output patterns that indicate an agent is waiting for user input (Blocked/Eclipse state).
@@ -809,13 +814,7 @@ mod tests {
     fn detect_claude_nix_wrapper() {
         // Nix wraps claude: argv[0] is preserved as "claude" even though
         // /proc/pid/exe points to .claude-wrapped
-        let args = &[
-            "claude",
-            "--model",
-            "claude-opus-4-5",
-            "--print",
-            "say hi",
-        ];
+        let args = &["claude", "--model", "claude-opus-4-5", "--print", "say hi"];
         assert_eq!(agent_name_from_args(args), Some("claude".to_string()));
     }
 

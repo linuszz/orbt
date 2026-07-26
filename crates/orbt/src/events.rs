@@ -8,8 +8,8 @@ use tracing::debug;
 
 use crate::ipc::{IpcReader, IpcWriter};
 use orbt_tui::app::{
-    AgentHover, AgentPanelMode, App, ContextMenuItem, ContextMenuTarget, InputMode, MobileCloseConfirm,
-    MobileCloseTarget, MobileColFocus, MobileView, COMMANDS,
+    AgentHover, AgentPanelMode, App, ContextMenuItem, ContextMenuTarget, InputMode,
+    MobileCloseConfirm, MobileCloseTarget, MobileColFocus, MobileView, COMMANDS,
 };
 use orbt_tui::tui::{
     agent_panel_width, render, render_mobile, OrbitTerminal, SIDEBAR_COLLAPSED_W, SIDEBAR_W,
@@ -424,6 +424,65 @@ async fn handle_eclipse_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
     }
 }
 
+async fn handle_agent_detail_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('q') | KeyCode::Enter => {
+            app.agent_detail_modal = None;
+            app.needs_redraw = true;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            if let Some(m) = &mut app.agent_detail_modal {
+                let max = m.recent_tools.len().saturating_sub(1);
+                if m.tool_scroll < max {
+                    m.tool_scroll += 1;
+                    app.needs_redraw = true;
+                }
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if let Some(m) = &mut app.agent_detail_modal {
+                if m.tool_scroll > 0 {
+                    m.tool_scroll -= 1;
+                    app.needs_redraw = true;
+                }
+            }
+        }
+        KeyCode::Char('v') => {
+            if let Some(modal) = app.agent_detail_modal.take() {
+                let agent_id = modal.agent_id;
+                if let Some(agent) = app.agents.iter().find(|a| a.id == agent_id) {
+                    if let Some(pane_id) = agent.pane_id {
+                        let found = app
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, t)| t.pane_tree.leaves().contains(&pane_id));
+                        let tab_id = found.map(|(_, t)| t.id).unwrap_or(app.active_tab_id);
+                        let tab_idx = found.map(|(i, _)| i).unwrap_or(app.active_tab);
+                        app.active_pane = pane_id;
+                        app.active_tab = tab_idx;
+                        app.active_tab_id = tab_id;
+                        app.selection = None;
+                        let _ = writer
+                            .send(ClientMessage::FocusPane { tab_id, pane_id })
+                            .await;
+                    }
+                }
+                app.needs_redraw = true;
+            }
+        }
+        KeyCode::Char('s') => {
+            if let Some(m) = &app.agent_detail_modal {
+                let agent_id = m.agent_id;
+                let _ = writer.send(ClientMessage::AgentAbort { agent_id }).await;
+                app.agent_detail_modal = None;
+                app.needs_redraw = true;
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Execute a confirmed close action from the mobile close-confirmation modal.
 async fn apply_mobile_close(confirm: MobileCloseConfirm, app: &mut App, writer: &IpcWriter) {
     match confirm.target {
@@ -448,11 +507,7 @@ async fn apply_mobile_close(confirm: MobileCloseConfirm, app: &mut App, writer: 
 
 /// Handle keyboard input when the close-confirmation modal is open.
 /// Always consumes the key.
-async fn handle_mobile_close_confirm_key(
-    key: KeyEvent,
-    app: &mut App,
-    writer: &IpcWriter,
-) {
+async fn handle_mobile_close_confirm_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
     match key.code {
         KeyCode::Left | KeyCode::Char('h') => {
             if let Some(ref mut c) = app.mobile_close_confirm {
@@ -573,12 +628,10 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                 KeyCode::Up | KeyCode::Char('k') => {
                     match app.mobile_col_focus {
                         MobileColFocus::Left => {
-                            app.mobile_spaces_cursor =
-                                app.mobile_spaces_cursor.saturating_sub(1);
+                            app.mobile_spaces_cursor = app.mobile_spaces_cursor.saturating_sub(1);
                         }
                         MobileColFocus::Right => {
-                            app.mobile_tabs_cursor =
-                                app.mobile_tabs_cursor.saturating_sub(1);
+                            app.mobile_tabs_cursor = app.mobile_tabs_cursor.saturating_sub(1);
                         }
                     }
                     app.needs_redraw = true;
@@ -588,13 +641,11 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                     match app.mobile_col_focus {
                         MobileColFocus::Left => {
                             let max = app.spaces.len(); // cursor=max → "+Space" button
-                            app.mobile_spaces_cursor =
-                                (app.mobile_spaces_cursor + 1).min(max);
+                            app.mobile_spaces_cursor = (app.mobile_spaces_cursor + 1).min(max);
                         }
                         MobileColFocus::Right => {
                             let max = app.tabs.len(); // cursor=max → "+ New Tab" button
-                            app.mobile_tabs_cursor =
-                                (app.mobile_tabs_cursor + 1).min(max);
+                            app.mobile_tabs_cursor = (app.mobile_tabs_cursor + 1).min(max);
                         }
                     }
                     app.needs_redraw = true;
@@ -617,16 +668,13 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                             if cursor < app.spaces.len() {
                                 // Switch space, stay in SPACES to pick a tab
                                 let space_id = app.spaces[cursor].space_id;
-                                let _ = writer
-                                    .send(ClientMessage::SwitchSpace { space_id })
-                                    .await;
+                                let _ = writer.send(ClientMessage::SwitchSpace { space_id }).await;
                                 app.active_space_idx = cursor;
                                 app.mobile_tabs_cursor = 0;
                             } else {
                                 // "+Space" button
-                                let _ = writer
-                                    .send(ClientMessage::CreateSpace { name: None })
-                                    .await;
+                                let _ =
+                                    writer.send(ClientMessage::CreateSpace { name: None }).await;
                             }
                         }
                         MobileColFocus::Right => {
@@ -647,9 +695,7 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                                 app.mobile_view = MobileView::Terminal;
                             } else {
                                 // "+ New Tab" button
-                                let _ = writer
-                                    .send(ClientMessage::NewTab { name: None })
-                                    .await;
+                                let _ = writer.send(ClientMessage::NewTab { name: None }).await;
                             }
                         }
                     }
@@ -720,6 +766,11 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
     // Eclipse modal captures all keyboard input when open.
     if app.eclipse_modal.is_some() {
         handle_eclipse_key(key, app, writer).await;
+        return;
+    }
+    // Agent Detail modal captures keyboard when open (lower priority than Eclipse).
+    if app.agent_detail_modal.is_some() {
+        handle_agent_detail_key(key, app, writer).await;
         return;
     }
 
@@ -815,9 +866,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
 
             // In mobile Actions view the palette is always fullscreen — pane navigation
             // would close it without switching panes visibly, so skip this block there.
-            if search.is_empty()
-                && !(app.mobile_mode && app.mobile_view == MobileView::Actions)
-            {
+            if search.is_empty() && !(app.mobile_mode && app.mobile_view == MobileView::Actions) {
                 let Some(tab) = app.tabs.get(app.active_tab) else {
                     app.mode = InputMode::Normal;
                     return;
@@ -1076,19 +1125,12 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         }
                     }
                 }
-                // d: dismiss (remove) idle/done/error agent from list
+                // d: open Agent Detail modal for selected agent
                 KeyCode::Char('d') => {
-                    let sel = *selected;
-                    if let Some(agent) = app.agents.get(sel) {
-                        if matches!(
-                            agent.status,
-                            orbt_protocol::AgentStatus::Idle
-                                | orbt_protocol::AgentStatus::Done
-                                | orbt_protocol::AgentStatus::Error
-                        ) {
-                            let agent_id = agent.id;
-                            let _ = writer.send(ClientMessage::AgentRemove { agent_id }).await;
-                        }
+                    let idx = *selected;
+                    if let Some(agent) = app.agents.get(idx) {
+                        let agent_id = agent.id;
+                        orbt_tui::tui::widgets::agent_detail_modal::open(app, agent_id);
                     }
                 }
                 KeyCode::Char('q') | KeyCode::Esc => {
@@ -1373,21 +1415,31 @@ async fn handle_launch_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
         KeyCode::Backspace => {
             if let Some(m) = &mut app.launch_modal {
                 match m.focus {
-                    LaunchFocus::Name  => { m.name.pop(); }
-                    LaunchFocus::Model => { m.model.pop(); }
-                    LaunchFocus::Cwd   => { m.cwd.pop(); }
+                    LaunchFocus::Name => {
+                        m.name.pop();
+                    }
+                    LaunchFocus::Model => {
+                        m.model.pop();
+                    }
+                    LaunchFocus::Cwd => {
+                        m.cwd.pop();
+                    }
                     LaunchFocus::AgentList => {}
                 }
             }
             app.needs_redraw = true;
         }
         // Printable chars: append to focused text field
-        KeyCode::Char(c) if !key.modifiers.contains(crossterm::event::KeyModifiers::CONTROL) => {
+        KeyCode::Char(c)
+            if !key
+                .modifiers
+                .contains(crossterm::event::KeyModifiers::CONTROL) =>
+        {
             if let Some(m) = &mut app.launch_modal {
                 match m.focus {
-                    LaunchFocus::Name  => m.name.push(c),
+                    LaunchFocus::Name => m.name.push(c),
                     LaunchFocus::Model => m.model.push(c),
-                    LaunchFocus::Cwd   => m.cwd.push(c),
+                    LaunchFocus::Cwd => m.cwd.push(c),
                     LaunchFocus::AgentList => {}
                 }
             }
@@ -1527,6 +1579,95 @@ async fn handle_eclipse_modal_mouse(
     }
 }
 
+async fn handle_agent_detail_modal_mouse(
+    mouse: crossterm::event::MouseEvent,
+    app: &mut App,
+    writer: &IpcWriter,
+    term_size: ratatui::layout::Rect,
+) {
+    let Some(modal) = &app.agent_detail_modal else {
+        return;
+    };
+
+    // Recompute modal geometry (must mirror agent_detail_modal::render).
+    let modal_w = 70u16.min(term_size.width.saturating_sub(4));
+    let modal_h = 30u16.min(term_size.height.saturating_sub(4));
+    let mx = term_size.x + (term_size.width.saturating_sub(modal_w)) / 2;
+    let my = term_size.y + (term_size.height.saturating_sub(modal_h)) / 2;
+
+    let inside = mouse.column >= mx
+        && mouse.column < mx + modal_w
+        && mouse.row >= my
+        && mouse.row < my + modal_h;
+
+    if !inside {
+        // Click outside: dismiss.
+        if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+            app.agent_detail_modal = None;
+            app.needs_redraw = true;
+        }
+        return;
+    }
+
+    if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        let btn_row = my + modal_h.saturating_sub(2);
+        if mouse.row == btn_row {
+            let col = mouse.column.saturating_sub(mx + 1);
+            // "[View Pane]" at col 1-11, "[Stop Agent]" at 14-26, "[Close]" at 29-36
+            let agent_id = modal.agent_id;
+            if (1..=11).contains(&col) {
+                // [View Pane]
+                app.agent_detail_modal = None;
+                if let Some(agent) = app.agents.iter().find(|a| a.id == agent_id) {
+                    if let Some(pane_id) = agent.pane_id {
+                        let found = app
+                            .tabs
+                            .iter()
+                            .enumerate()
+                            .find(|(_, t)| t.pane_tree.leaves().contains(&pane_id));
+                        let tab_id = found.map(|(_, t)| t.id).unwrap_or(app.active_tab_id);
+                        let tab_idx = found.map(|(i, _)| i).unwrap_or(app.active_tab);
+                        app.active_pane = pane_id;
+                        app.active_tab = tab_idx;
+                        app.active_tab_id = tab_id;
+                        app.selection = None;
+                        let _ = writer
+                            .send(ClientMessage::FocusPane { tab_id, pane_id })
+                            .await;
+                    }
+                }
+            } else if (14..=26).contains(&col) {
+                // [Stop Agent]
+                let _ = writer.send(ClientMessage::AgentAbort { agent_id }).await;
+                app.agent_detail_modal = None;
+            } else if (29..=36).contains(&col) {
+                // [Close]
+                app.agent_detail_modal = None;
+            }
+            app.needs_redraw = true;
+            return;
+        }
+    }
+
+    // Scroll via mouse wheel.
+    if matches!(mouse.kind, MouseEventKind::ScrollDown) {
+        if let Some(m) = &mut app.agent_detail_modal {
+            let max = m.recent_tools.len().saturating_sub(1);
+            if m.tool_scroll < max {
+                m.tool_scroll += 1;
+                app.needs_redraw = true;
+            }
+        }
+    } else if matches!(mouse.kind, MouseEventKind::ScrollUp) {
+        if let Some(m) = &mut app.agent_detail_modal {
+            if m.tool_scroll > 0 {
+                m.tool_scroll -= 1;
+                app.needs_redraw = true;
+            }
+        }
+    }
+}
+
 async fn handle_mobile_mouse(
     mouse: crossterm::event::MouseEvent,
     app: &mut App,
@@ -1540,6 +1681,10 @@ async fn handle_mobile_mouse(
     // Modals take priority.
     if app.eclipse_modal.is_some() {
         handle_eclipse_modal_mouse(mouse, app, writer, term_size).await;
+        return;
+    }
+    if app.agent_detail_modal.is_some() {
+        handle_agent_detail_modal_mouse(mouse, app, writer, term_size).await;
         return;
     }
     if app.launch_modal.is_some() {
@@ -1610,17 +1755,103 @@ async fn handle_mobile_mouse(
                         }
                     }
                     MobileView::Agents => {
-                        // Mobile agents header at row 1 (first content row):
-                        // "[+ New]" occupies the last 7 cols.
-                        if mouse.row == 1 && mouse.column + 7 >= term_w {
-                            orbt_tui::tui::widgets::launch_modal::open(app);
+                        // content_area: y=1, width=term_w. render() draws Borders::LEFT so iw = term_w-1.
+                        let panel_y = 1u16;
+                        let iw = term_w.saturating_sub(1);
+                        let slot_h = orbt_tui::tui::widgets::agent_monitor::card_slot_height(iw);
+                        let any_blocked = app
+                            .agents
+                            .iter()
+                            .any(|a| a.status == orbt_protocol::AgentStatus::Blocked);
+
+                        // Header row: "[+]×" occupies the last 4 cols of panel_y.
+                        // "[+]" → open launch modal; "×" → navigate back to terminal.
+                        if mouse.row == panel_y && mouse.column + 4 >= term_w {
+                            if mouse.column + 1 < term_w {
+                                orbt_tui::tui::widgets::launch_modal::open(app);
+                            } else {
+                                app.mobile_view = MobileView::Terminal;
+                                app.mode = InputMode::Normal;
+                            }
                             app.needs_redraw = true;
+                            return;
                         }
-                        // Footer row ("[+] Add Agent") is pinned to the last content row.
+
+                        // Eclipse banner: 2 rows starting at panel_y+2+scroll_indicator.
+                        if any_blocked {
+                            let above_row = if app.agent_scroll_offset > 0 { 1u16 } else { 0 };
+                            let banner_y = panel_y + 2 + above_row;
+                            if mouse.row == banner_y || mouse.row == banner_y + 1 {
+                                if let Some(blocked) = app
+                                    .agents
+                                    .iter()
+                                    .find(|a| a.status == orbt_protocol::AgentStatus::Blocked)
+                                {
+                                    let agent_id = blocked.id;
+                                    orbt_tui::tui::widgets::eclipse_modal::open(app, agent_id);
+                                }
+                                app.needs_redraw = true;
+                                return;
+                            }
+                        }
+
+                        // Card slot click: iterate visible agents.
+                        // For blocked agents → open Eclipse modal; others → focus pane + switch to Terminal.
+                        let above_row = if app.agent_scroll_offset > 0 { 1u16 } else { 0 };
+                        let blocked_rows = if any_blocked { 2u16 } else { 0 };
+                        let cards_base = panel_y + 2 + above_row + blocked_rows;
+                        let scroll = app.agent_scroll_offset;
+                        let visible: Vec<(
+                            orbt_protocol::AgentId,
+                            Option<orbt_protocol::PaneId>,
+                            orbt_protocol::AgentStatus,
+                        )> = app
+                            .agents
+                            .iter()
+                            .skip(scroll)
+                            .map(|a| (a.id, a.pane_id, a.status.clone()))
+                            .collect();
+                        let mut card_y = cards_base;
+                        for (agent_id, agent_pane, agent_status) in visible {
+                            if mouse.row >= card_y && mouse.row < card_y + slot_h {
+                                match agent_status {
+                                    orbt_protocol::AgentStatus::Blocked => {
+                                        orbt_tui::tui::widgets::eclipse_modal::open(app, agent_id);
+                                    }
+                                    _ => {
+                                        if let Some(pane_id) = agent_pane {
+                                            let found =
+                                                app.tabs.iter().enumerate().find(|(_, t)| {
+                                                    t.pane_tree.leaves().contains(&pane_id)
+                                                });
+                                            let tab_id = found
+                                                .map(|(_, t)| t.id)
+                                                .unwrap_or(app.active_tab_id);
+                                            let tab_idx =
+                                                found.map(|(i, _)| i).unwrap_or(app.active_tab);
+                                            app.active_pane = pane_id;
+                                            app.active_tab = tab_idx;
+                                            app.active_tab_id = tab_id;
+                                            app.selection = None;
+                                            let _ = writer
+                                                .send(ClientMessage::FocusPane { tab_id, pane_id })
+                                                .await;
+                                            app.mobile_view = MobileView::Terminal;
+                                        }
+                                    }
+                                }
+                                app.needs_redraw = true;
+                                return;
+                            }
+                            card_y = card_y.saturating_add(slot_h);
+                        }
+
+                        // Footer row ("[+] Add Agent").
                         let content_h = nav_row.saturating_sub(1);
                         let footer_row = 1u16 + content_h.saturating_sub(1);
                         if mouse.row == footer_row {
                             orbt_tui::tui::widgets::launch_modal::open(app);
+                            app.needs_redraw = true;
                         }
                     }
                     MobileView::Windows => {
@@ -1653,9 +1884,8 @@ async fn handle_mobile_mouse(
                                     app.mobile_spaces_cursor = idx;
                                     app.mobile_col_focus = MobileColFocus::Left;
                                     let space_id = app.spaces[idx].space_id;
-                                    let _ = writer
-                                        .send(ClientMessage::SwitchSpace { space_id })
-                                        .await;
+                                    let _ =
+                                        writer.send(ClientMessage::SwitchSpace { space_id }).await;
                                     app.active_space_idx = idx;
                                     app.mobile_tabs_cursor = 0;
                                 }
@@ -1697,9 +1927,7 @@ async fn handle_mobile_mouse(
                                     }
                                 }
                                 SpacesHit::NewTab => {
-                                    let _ = writer
-                                        .send(ClientMessage::NewTab { name: None })
-                                        .await;
+                                    let _ = writer.send(ClientMessage::NewTab { name: None }).await;
                                 }
                                 SpacesHit::None => {}
                             }
@@ -1730,8 +1958,9 @@ async fn handle_mobile_mouse(
                             && mouse.row < list_start_y + list_h as u16
                         {
                             let clicked_row = (mouse.row - list_start_y) as usize;
-                            if let InputMode::CommandPalette { search, selected, .. } =
-                                &mut app.mode
+                            if let InputMode::CommandPalette {
+                                search, selected, ..
+                            } = &mut app.mode
                             {
                                 let filtered = filtered_indices(search);
                                 // Build row offsets accounting for group headers
@@ -1768,8 +1997,7 @@ async fn handle_mobile_mouse(
             if app.mobile_view == MobileView::Windows {
                 match app.mobile_col_focus {
                     MobileColFocus::Left => {
-                        app.mobile_spaces_cursor =
-                            app.mobile_spaces_cursor.saturating_sub(1);
+                        app.mobile_spaces_cursor = app.mobile_spaces_cursor.saturating_sub(1);
                     }
                     MobileColFocus::Right => {
                         app.mobile_tabs_cursor = app.mobile_tabs_cursor.saturating_sub(1);
@@ -1800,8 +2028,7 @@ async fn handle_mobile_mouse(
                 match app.mobile_col_focus {
                     MobileColFocus::Left => {
                         let max = app.spaces.len();
-                        app.mobile_spaces_cursor =
-                            (app.mobile_spaces_cursor + 1).min(max);
+                        app.mobile_spaces_cursor = (app.mobile_spaces_cursor + 1).min(max);
                     }
                     MobileColFocus::Right => {
                         let max = app.tabs.len();
@@ -1810,7 +2037,10 @@ async fn handle_mobile_mouse(
                 }
                 app.needs_redraw = true;
             } else if app.mobile_view == MobileView::Actions {
-                if let InputMode::CommandPalette { search, selected, .. } = &mut app.mode {
+                if let InputMode::CommandPalette {
+                    search, selected, ..
+                } = &mut app.mode
+                {
                     let max = filtered_indices(search).len();
                     if max > 0 {
                         *selected = (*selected + 1).min(max - 1);
@@ -1840,6 +2070,11 @@ async fn handle_mouse(
     // Mobile mode has its own simplified mouse handler.
     if app.mobile_mode {
         handle_mobile_mouse(mouse, app, writer, term_size).await;
+        return;
+    }
+
+    if app.agent_detail_modal.is_some() {
+        handle_agent_detail_modal_mouse(mouse, app, writer, term_size).await;
         return;
     }
 
@@ -2172,18 +2407,19 @@ async fn handle_mouse(
                 );
                 let mut card_row_start = base_row;
                 let scroll = app.agent_scroll_offset;
-                // Collect (id, pane_id, status) so we can drop the borrow before mutations.
+                // Collect (id, pane_id, status, protocol) so we can drop the borrow before mutations.
                 let visible: Vec<(
                     orbt_protocol::AgentId,
                     Option<orbt_protocol::PaneId>,
                     orbt_protocol::AgentStatus,
+                    orbt_protocol::AgentProtocol,
                 )> = app
                     .agents
                     .iter()
                     .skip(scroll)
-                    .map(|a| (a.id, a.pane_id, a.status.clone()))
+                    .map(|a| (a.id, a.pane_id, a.status.clone(), a.protocol.clone()))
                     .collect();
-                for (agent_id, agent_pane, agent_status) in visible {
+                for (agent_id, agent_pane, agent_status, agent_protocol) in visible {
                     // Narrow card slot: separator at slot+0, buttons at slot+5.
                     let btn_row = card_row_start + 5;
                     if mouse.row == btn_row {
@@ -2198,6 +2434,17 @@ async fn handle_mouse(
                             None
                         };
                         if let Some(s) = slot {
+                            // Slot 2 for ACP agents: open detail modal instead of the default action.
+                            if s == 2
+                                && !matches!(
+                                    agent_protocol,
+                                    orbt_protocol::AgentProtocol::Heuristic
+                                )
+                            {
+                                orbt_tui::tui::widgets::agent_detail_modal::open(app, agent_id);
+                                app.needs_redraw = true;
+                                return;
+                            }
                             match (s, &agent_status) {
                                 // Slot 0: [View] — focus agent's pane, switching tabs if needed
                                 (0, _) => {

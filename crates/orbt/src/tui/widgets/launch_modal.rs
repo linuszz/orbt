@@ -28,7 +28,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let modal_h = MODAL_H.min(area.height.saturating_sub(4));
     let x = area.x + (area.width.saturating_sub(modal_w)) / 2;
     let y = area.y + (area.height.saturating_sub(modal_h)) / 2;
-    let modal_area = Rect { x, y, width: modal_w, height: modal_h };
+    let modal_area = Rect {
+        x,
+        y,
+        width: modal_w,
+        height: modal_h,
+    };
 
     frame.render_widget(Clear, modal_area);
 
@@ -62,7 +67,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         if list_row >= row + agent_box_h.saturating_sub(1) {
             break;
         }
-        let Some(&(cmd, label, acp)) = LAUNCH_AGENTS.get(i) else { break };
+        let Some(&(cmd, label, acp)) = LAUNCH_AGENTS.get(i) else {
+            break;
+        };
         let selected = modal.selected_agent == i;
         let (pfx_fg, cmd_fg, lbl_fg, bg) = if selected {
             (accent(), fg_primary(), fg_secondary(), bg_card())
@@ -77,26 +84,34 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let cmd_w: usize = 12;
         let badge_w: usize = badge.len() + 1; // +1 for leading space
         let inner_w = (box_w.saturating_sub(4)) as usize; // 2-border + 2-padding
-        let label_w = inner_w
-            .saturating_sub(cmd_w + 2 + badge_w);
+        let label_w = inner_w.saturating_sub(cmd_w + 2 + badge_w);
 
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(format!(" {prefix} "), Style::default().fg(pfx_fg).bg(bg)),
                 Span::styled(
                     format!("{cmd:<cmd_w$}"),
-                    Style::default().fg(cmd_fg).add_modifier(if selected { Modifier::BOLD } else { Modifier::empty() }).bg(bg),
+                    Style::default()
+                        .fg(cmd_fg)
+                        .add_modifier(if selected {
+                            Modifier::BOLD
+                        } else {
+                            Modifier::empty()
+                        })
+                        .bg(bg),
                 ),
                 Span::styled(
                     format!("  {:<label_w$}", label),
                     Style::default().fg(lbl_fg).bg(bg),
                 ),
-                Span::styled(
-                    format!(" {badge}"),
-                    Style::default().fg(badge_fg).bg(bg),
-                ),
+                Span::styled(format!(" {badge}"), Style::default().fg(badge_fg).bg(bg)),
             ])),
-            Rect { x: box_x + 1, y: list_row, width: box_w.saturating_sub(2), height: 1 },
+            Rect {
+                x: box_x + 1,
+                y: list_row,
+                width: box_w.saturating_sub(2),
+                height: 1,
+            },
         );
     }
     row += agent_box_h;
@@ -105,16 +120,44 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     row += 1;
     render_section_label(frame, ix, row, iw, "Name", "auto-generated if blank");
     row += 1;
-    render_box(frame, box_x, row, box_w, 3, modal.focus == LaunchFocus::Name);
-    render_text_field(frame, box_x + 1, row + 1, box_w.saturating_sub(2), &modal.name, modal.focus == LaunchFocus::Name);
+    render_box(
+        frame,
+        box_x,
+        row,
+        box_w,
+        3,
+        modal.focus == LaunchFocus::Name,
+    );
+    render_text_field(
+        frame,
+        box_x + 1,
+        row + 1,
+        box_w.saturating_sub(2),
+        &modal.name,
+        modal.focus == LaunchFocus::Name,
+    );
     row += 3;
 
     // ── Model ────────────────────────────────────────────────────────────────
     row += 1;
     render_section_label(frame, ix, row, iw, "Model", "agent default if blank");
     row += 1;
-    render_box(frame, box_x, row, box_w, 3, modal.focus == LaunchFocus::Model);
-    render_text_field(frame, box_x + 1, row + 1, box_w.saturating_sub(2), &modal.model, modal.focus == LaunchFocus::Model);
+    render_box(
+        frame,
+        box_x,
+        row,
+        box_w,
+        3,
+        modal.focus == LaunchFocus::Model,
+    );
+    render_text_field(
+        frame,
+        box_x + 1,
+        row + 1,
+        box_w.saturating_sub(2),
+        &modal.model,
+        modal.focus == LaunchFocus::Model,
+    );
     row += 3;
 
     // ── Working directory ─────────────────────────────────────────────────────
@@ -122,7 +165,14 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     render_section_label(frame, ix, row, iw, "Working directory", "");
     row += 1;
     render_box(frame, box_x, row, box_w, 3, modal.focus == LaunchFocus::Cwd);
-    render_text_field(frame, box_x + 1, row + 1, box_w.saturating_sub(2), &modal.cwd, modal.focus == LaunchFocus::Cwd);
+    render_text_field(
+        frame,
+        box_x + 1,
+        row + 1,
+        box_w.saturating_sub(2),
+        &modal.cwd,
+        modal.focus == LaunchFocus::Cwd,
+    );
     row += 3;
 
     // ── Footer ────────────────────────────────────────────────────────────────
@@ -140,7 +190,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 Span::styled("Esc", Style::default().fg(fg_secondary())),
                 Span::styled(": cancel", Style::default().fg(fg_muted())),
             ])),
-            Rect { x: ix, y: row, width: iw, height: 1 },
+            Rect {
+                x: ix,
+                y: row,
+                width: iw,
+                height: 1,
+            },
         );
     }
 }
@@ -151,7 +206,12 @@ fn render_section_label(frame: &mut Frame, x: u16, y: u16, w: u16, label: &str, 
     let pad = (w as usize).saturating_sub(label.len() + hint_len + 1);
     let mut spans = vec![
         Span::raw(" "),
-        Span::styled(label, Style::default().fg(fg_secondary()).add_modifier(Modifier::BOLD)),
+        Span::styled(
+            label,
+            Style::default()
+                .fg(fg_secondary())
+                .add_modifier(Modifier::BOLD),
+        ),
     ];
     if !hint.is_empty() {
         spans.push(Span::raw(" ".repeat(pad)));
@@ -160,7 +220,12 @@ fn render_section_label(frame: &mut Frame, x: u16, y: u16, w: u16, label: &str, 
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)),
-        Rect { x, y, width: w, height: 1 },
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
     );
 }
 
@@ -172,7 +237,15 @@ fn render_box(frame: &mut Frame, x: u16, y: u16, w: u16, h: u16, focused: bool) 
         .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(bg_secondary()));
-    frame.render_widget(block, Rect { x, y, width: w, height: h });
+    frame.render_widget(
+        block,
+        Rect {
+            x,
+            y,
+            width: w,
+            height: h,
+        },
+    );
 }
 
 /// Render editable text with cursor at end (single-line).
@@ -191,7 +264,12 @@ fn render_text_field(frame: &mut Frame, x: u16, y: u16, w: u16, text: &str, focu
     }
     frame.render_widget(
         Paragraph::new(Line::from(spans)),
-        Rect { x, y, width: w, height: 1 },
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
     );
 }
 

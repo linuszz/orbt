@@ -44,15 +44,12 @@ fn format_duration(secs: u32) -> String {
     }
 }
 
-fn render_row(
-    frame: &mut Frame,
-    text: &str,
-    x: u16,
-    y: u16,
-    w: u16,
-    color: ratatui::style::Color,
-) {
-    let padded = format!("{:<width$}", truncate_str(text, w as usize), width = w as usize);
+fn render_row(frame: &mut Frame, text: &str, x: u16, y: u16, w: u16, color: ratatui::style::Color) {
+    let padded = format!(
+        "{:<width$}",
+        truncate_str(text, w as usize),
+        width = w as usize
+    );
     frame.render_widget(
         Paragraph::new(Span::styled(
             padded,
@@ -228,13 +225,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     if row > content_bottom {
-        render_buttons(
-            frame,
-            modal,
-            ix,
-            modal_area.y + modal_area.height - 2,
-            iw,
-        );
+        render_buttons(frame, modal, ix, modal_area.y + modal_area.height - 2, iw);
         return;
     }
 
@@ -265,9 +256,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // Tool History section
-    if row <= content_bottom
-        && (!modal.recent_tools.is_empty() || modal.total_tool_calls > 0)
-    {
+    if row <= content_bottom && (!modal.recent_tools.is_empty() || modal.total_tool_calls > 0) {
         let hist_title = format!("Tool History  ({} total)", modal.total_tool_calls);
         render_section_header(frame, &hist_title, ix, row, iw);
         row += 1;
@@ -310,8 +299,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 .duration_ms
                 .map(|d| format!("  {}ms", d))
                 .unwrap_or_default();
-            let args_max =
-                iw.saturating_sub(16 + dur_str.len() as u16) as usize;
+            let args_max = iw.saturating_sub(16 + dur_str.len() as u16) as usize;
             let line = format!(
                 " #{:<3} {} {:<8} {:<args_max$}{}",
                 call_num,
@@ -392,22 +380,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     // Button row pinned to bottom
-    render_buttons(
-        frame,
-        modal,
-        ix,
-        modal_area.y + modal_area.height - 2,
-        iw,
-    );
+    render_buttons(frame, modal, ix, modal_area.y + modal_area.height - 2, iw);
 }
 
-fn render_buttons(
-    frame: &mut Frame,
-    _modal: &AgentDetailModalState,
-    ix: u16,
-    y: u16,
-    iw: u16,
-) {
+fn render_buttons(frame: &mut Frame, _modal: &AgentDetailModalState, ix: u16, y: u16, iw: u16) {
     let divider = "\u{2500}".repeat(iw as usize);
     frame.render_widget(
         Paragraph::new(Span::styled(
@@ -467,9 +443,7 @@ mod tests {
 
         let mut terminal =
             ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 30)).unwrap();
-        terminal
-            .draw(|f| render(f, f.area(), &app))
-            .unwrap();
+        terminal.draw(|f| render(f, f.area(), &app)).unwrap();
         // Modal title should contain agent name.
         let buf = terminal.backend().buffer().clone();
         let flat: String = buf.content().iter().map(|c| c.symbol()).collect();

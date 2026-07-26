@@ -177,12 +177,12 @@ pub struct Selection {
 /// Known agent types the user can launch from the Launch Agent overlay.
 /// Fields: (command, display_name, acp_capable)
 pub const LAUNCH_AGENTS: &[(&str, &str, bool)] = &[
-    ("claude",    "Claude Code",   false),
-    ("opencode",  "OpenCode AI",   true),
-    ("codex-cli", "Codex CLI",     true),
-    ("gemini",    "Gemini CLI",    true),
-    ("aider",     "Aider",         false),
-    ("cline",     "Cline",         true),
+    ("claude", "Claude Code", false),
+    ("opencode", "OpenCode AI", true),
+    ("codex-cli", "Codex CLI", true),
+    ("gemini", "Gemini CLI", true),
+    ("aider", "Aider", false),
+    ("cline", "Cline", true),
 ];
 
 /// Which field has keyboard focus in the Launch Agent modal.
@@ -1169,6 +1169,25 @@ impl App {
             }
             ServerEvent::AgentMetricsUpdated { agent_id, metrics } => {
                 self.agent_metrics.insert(*agent_id, metrics.clone());
+                self.needs_redraw = true;
+            }
+            ServerEvent::AgentAcpUpdated { agent_id, data } => {
+                if let Some(agent) = self.agents.iter_mut().find(|a| a.id == *agent_id) {
+                    if let Some(detail) = agent.detail.as_mut() {
+                        detail.acp = Some(data.clone());
+                    }
+                }
+                // Update the open detail modal in-place if it is showing this agent.
+                if let Some(m) = &mut self.agent_detail_modal {
+                    if m.agent_id == *agent_id {
+                        m.tokens_in = data.tokens_in;
+                        m.tokens_out = data.tokens_out;
+                        m.current_tool = data.current_tool.clone();
+                        m.recent_tools = data.recent_tools.clone();
+                        m.total_tool_calls = data.total_tool_calls;
+                        m.files_touched = data.files_touched.clone();
+                    }
+                }
                 self.needs_redraw = true;
             }
             ServerEvent::PayloadReady { path } => {

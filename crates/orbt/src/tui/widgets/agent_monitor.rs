@@ -436,16 +436,17 @@ fn render_card_narrow(
     } else {
         false
     };
-    let card_bg = if is_selected { bg_card() } else { bg_secondary() };
+    let card_bg = if is_selected {
+        bg_card()
+    } else {
+        bg_secondary()
+    };
 
     // Selection/status mark for rows 2-5 (▸ selected, ▌ animated otherwise).
     let accent_mark = if is_selected {
         Span::styled("\u{25B8}", Style::default().fg(accent()).bg(card_bg))
     } else {
-        Span::styled(
-            "\u{258C}",
-            Style::default().fg(sc).bg(card_bg),
-        )
+        Span::styled("\u{258C}", Style::default().fg(sc).bg(card_bg))
     };
 
     // slot+0: separator rule
@@ -559,11 +560,17 @@ fn render_card_narrow(
             Span::styled(left, Style::default().fg(fg_muted()).bg(card_bg)),
         ];
         if is_acp {
-            row_spans.push(Span::styled(badge, Style::default().fg(accent_idle()).bg(card_bg)));
+            row_spans.push(Span::styled(
+                badge,
+                Style::default().fg(accent_idle()).bg(card_bg),
+            ));
         }
         row_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(card_bg)));
         if !right.is_empty() {
-            row_spans.push(Span::styled(right, Style::default().fg(fg_muted()).bg(card_bg)));
+            row_spans.push(Span::styled(
+                right,
+                Style::default().fg(fg_muted()).bg(card_bg),
+            ));
         }
 
         frame.render_widget(
@@ -779,7 +786,11 @@ fn render_card_wide(
     } else {
         false
     };
-    let card_bg = if is_selected { bg_card() } else { bg_secondary() };
+    let card_bg = if is_selected {
+        bg_card()
+    } else {
+        bg_secondary()
+    };
     let top_color = if is_selected { accent() } else { sc };
     let side_color = border();
 
@@ -862,9 +873,7 @@ fn render_card_wide(
         let inner_content = format!(
             " {}{}{} ",
             left,
-            " ".repeat(
-                iw.saturating_sub(1 + left.chars().count() + right.len() + 1)
-            ),
+            " ".repeat(iw.saturating_sub(1 + left.chars().count() + right.len() + 1)),
             right.trim_start()
         );
         let inner_padded = format!("{:<iw$}", inner_content, iw = iw);
@@ -1033,7 +1042,14 @@ fn render_card_wide(
             (fg_muted(), card_bg)
         };
         let (f2, bg2) = if h2 {
-            (bg_primary(), if b2_danger { accent_error() } else { accent_hover() })
+            (
+                bg_primary(),
+                if b2_danger {
+                    accent_error()
+                } else {
+                    accent_hover()
+                },
+            )
         } else if b2_danger {
             (accent_error(), card_bg)
         } else {
@@ -1146,7 +1162,11 @@ pub fn card_start_row(
 
 /// Returns the row height of one card slot: 6 for narrow cards (iw < 30), 7 for wide.
 pub fn card_slot_height(iw: u16) -> u16 {
-    if iw < 30 { 6 } else { 7 }
+    if iw < 30 {
+        6
+    } else {
+        7
+    }
 }
 
 /// Render the Agent Fleet panel as a floating modal centered over `screen`.
@@ -1199,9 +1219,7 @@ pub fn render_mobile_agents_header(frame: &mut Frame, area: Rect, app: &App) {
     // " AGENTS "(8) + count_label + fill + "[+ New]"(7) = w
     let new_btn = "[+ New]";
     let new_btn_len = new_btn.len() as u16;
-    let fill = w
-        .saturating_sub(8 + count_label.len() as u16 + new_btn_len)
-        as usize;
+    let fill = w.saturating_sub(8 + count_label.len() as u16 + new_btn_len) as usize;
 
     frame.render_widget(
         Paragraph::new(Line::from(vec![
@@ -1212,7 +1230,10 @@ pub fn render_mobile_agents_header(frame: &mut Frame, area: Rect, app: &App) {
                     .bg(bg_tertiary())
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::styled(count_label, Style::default().fg(count_color).bg(bg_tertiary())),
+            Span::styled(
+                count_label,
+                Style::default().fg(count_color).bg(bg_tertiary()),
+            ),
             Span::styled(" ".repeat(fill), Style::default().bg(bg_tertiary())),
             Span::styled(new_btn, Style::default().fg(fg_muted()).bg(bg_tertiary())),
         ])),

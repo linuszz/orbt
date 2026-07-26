@@ -100,7 +100,11 @@ fn check_known_hosts_interactive(
 
 // ─── Auth helpers ─────────────────────────────────────────────────────────────
 
-async fn authenticate(handle: &mut russh::client::Handle<SshHandler>, user: &str, host: &str) -> Result<()> {
+async fn authenticate(
+    handle: &mut russh::client::Handle<SshHandler>,
+    user: &str,
+    host: &str,
+) -> Result<()> {
     // 1. Try SSH agent via SSH_AUTH_SOCK (Unix only)
     #[cfg(unix)]
     if let Ok(sock_path) = std::env::var("SSH_AUTH_SOCK") {
@@ -145,8 +149,8 @@ async fn authenticate(handle: &mut russh::client::Handle<SshHandler>, user: &str
                     || msg.contains("bad decrypt")
                 {
                     let prompt = format!("Enter passphrase for {}: ", key_path.display());
-                    let pass = rpassword::prompt_password(&prompt)
-                        .context("failed to read passphrase")?;
+                    let pass =
+                        rpassword::prompt_password(&prompt).context("failed to read passphrase")?;
                     match russh::keys::load_secret_key(&key_path, Some(pass.as_str())) {
                         Ok(kp) => kp,
                         Err(_) => {
@@ -206,7 +210,10 @@ async fn remote_uid(handle: &mut russh::client::Handle<SshHandler>) -> Result<u3
         .channel_open_session()
         .await
         .context("failed to open exec channel")?;
-    channel.exec(true, "id -u").await.context("failed to exec 'id -u' on remote")?;
+    channel
+        .exec(true, "id -u")
+        .await
+        .context("failed to exec 'id -u' on remote")?;
 
     let mut output = String::new();
     let mut got_exit = false;

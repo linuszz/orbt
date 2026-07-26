@@ -23,7 +23,12 @@ pub fn modal_rect(area: Rect) -> Rect {
     let h = 5u16;
     let x = area.x + area.width.saturating_sub(w) / 2;
     let y = area.y + area.height.saturating_sub(h) / 2;
-    Rect { x, y, width: w, height: h }
+    Rect {
+        x,
+        y,
+        width: w,
+        height: h,
+    }
 }
 
 fn inner_rect(modal: Rect) -> Rect {
@@ -99,7 +104,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 .bg(bg_secondary())
                 .add_modifier(Modifier::BOLD),
         ))),
-        Rect { x: inner.x, y: inner.y, width: inner.width, height: 1 },
+        Rect {
+            x: inner.x,
+            y: inner.y,
+            width: inner.width,
+            height: 1,
+        },
     );
 
     // Row 2: buttons — left half = Cancel, right half = Confirm
@@ -129,13 +139,23 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             format!("{:^fill$}", "[Cancel]", fill = half_w as usize),
             cancel_style,
         ))),
-        Rect { x: inner.x, y: inner.y + 2, width: half_w, height: 1 },
+        Rect {
+            x: inner.x,
+            y: inner.y + 2,
+            width: half_w,
+            height: 1,
+        },
     );
     frame.render_widget(
         Paragraph::new(Line::from(Span::styled(
             format!("{:^fill$}", "[Confirm]", fill = right_w as usize),
             confirm_style,
         ))),
-        Rect { x: inner.x + half_w, y: inner.y + 2, width: right_w, height: 1 },
+        Rect {
+            x: inner.x + half_w,
+            y: inner.y + 2,
+            width: right_w,
+            height: 1,
+        },
     );
 }
