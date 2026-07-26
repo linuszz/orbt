@@ -51,12 +51,12 @@ pub enum ToolCallStatus {
     Error,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolCall {
     pub id: u32,
     /// Tool name as reported by the agent, e.g. "Bash", "Read", "Write".
     pub tool: String,
-    /// Args truncated to <=60 chars by the daemon.
+    /// Args truncated to ≤60 chars by the daemon.
     pub args_summary: String,
     pub status: ToolCallStatus,
     /// Wall-clock duration in ms; None while Running.
@@ -71,7 +71,7 @@ pub enum FileKind {
     Deleted,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileTouched {
     pub path: String,
     pub kind: FileKind,
@@ -81,7 +81,7 @@ pub struct FileTouched {
 pub struct AcpDetail {
     /// Tool call currently executing, if any.
     pub current_tool: Option<ToolCall>,
-    /// Last <=20 completed calls, newest-first.
+    /// Last ≤20 completed calls, newest-first.
     pub recent_tools: Vec<ToolCall>,
     /// Running total including evicted calls.
     pub total_tool_calls: u32,
