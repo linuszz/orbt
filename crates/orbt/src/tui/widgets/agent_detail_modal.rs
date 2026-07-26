@@ -199,10 +199,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let label = status_label(&modal.status).trim_matches(|c: char| c == '[' || c == ']');
         let dur = format_duration(modal.duration_s);
         let tok_part = if modal.tokens_in > 0 || modal.tokens_out > 0 {
+            let total = modal.tokens_in.saturating_add(modal.tokens_out);
             format!(
-                "  \u{00B7}  in:{} out:{}",
+                "  \u{00B7}  in:{} out:{} total:{}",
                 format_tokens(modal.tokens_in),
-                format_tokens(modal.tokens_out)
+                format_tokens(modal.tokens_out),
+                format_tokens(total)
             )
         } else {
             String::new()
@@ -287,9 +289,8 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 break;
             }
             let call_num = modal
-                .recent_tools
-                .len()
-                .saturating_sub(modal.tool_scroll + i);
+                .total_tool_calls
+                .saturating_sub((modal.tool_scroll + i) as u32);
             let (sym, col) = match tc.status {
                 ToolCallStatus::Running => ("\u{25CF}", working_pulse_color(app.tick_count)),
                 ToolCallStatus::Done => ("\u{2713}", fg_secondary()),

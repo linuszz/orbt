@@ -1636,11 +1636,11 @@ async fn handle_agent_detail_modal_mouse(
                             .await;
                     }
                 }
-            } else if (14..=26).contains(&col) {
+            } else if (14..=25).contains(&col) {
                 // [Stop Agent]
                 let _ = writer.send(ClientMessage::AgentAbort { agent_id }).await;
                 app.agent_detail_modal = None;
-            } else if (29..=36).contains(&col) {
+            } else if (28..=34).contains(&col) {
                 // [Close]
                 app.agent_detail_modal = None;
             }
