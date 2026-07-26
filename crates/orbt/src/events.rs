@@ -1805,14 +1805,151 @@ async fn handle_mobile_mouse(
                             orbt_protocol::AgentId,
                             Option<orbt_protocol::PaneId>,
                             orbt_protocol::AgentStatus,
+                            orbt_protocol::AgentProtocol,
                         )> = app
                             .agents
                             .iter()
                             .skip(scroll)
-                            .map(|a| (a.id, a.pane_id, a.status.clone()))
+                            .map(|a| (a.id, a.pane_id, a.status.clone(), a.protocol.clone()))
                             .collect();
                         let mut card_y = cards_base;
-                        for (agent_id, agent_pane, agent_status) in visible {
+                        for (agent_id, agent_pane, agent_status, agent_protocol) in visible {
+                            let btn_row = card_y + slot_h.saturating_sub(1);
+                            let is_acp = !matches!(
+                                agent_protocol,
+                                orbt_protocol::AgentProtocol::Heuristic
+                            );
+
+                            // Button row: detect which slot was clicked.
+                            // Button layout: │[View] [SlotA] [SlotB]
+                            // col 0: border │
+                            // cols  1- 6: slot 0 [View] (6 chars)
+                            // col  7: space
+                            // cols  8-13: slot 1 (6 chars)
+                            // col 14: space
+                            // cols 15-22: slot 2 (up to 8 chars for [Detail])
+                            if mouse.row == btn_row {
+                                let col = mouse.column;
+                                let slot = if (1..=6).contains(&col) {
+                                    Some(0u8)
+                                } else if (8..=13).contains(&col) {
+                                    Some(1)
+                                } else if col >= 15 {
+                                    Some(2)
+                                } else {
+                                    None
+                                };
+
+                                if let Some(s) = slot {
+                                    match s {
+                                        // Slot 0: [View] — focus pane and navigate to Terminal view.
+                                        0 => {
+                                            if let Some(pane_id) = agent_pane {
+                                                let found =
+                                                    app.tabs.iter().enumerate().find(|(_, t)| {
+                                                        t.pane_tree.leaves().contains(&pane_id)
+                                                    });
+                                                let tab_id = found
+                                                    .map(|(_, t)| t.id)
+                                                    .unwrap_or(app.active_tab_id);
+                                                let tab_idx = found
+                                                    .map(|(i, _)| i)
+                                                    .unwrap_or(app.active_tab);
+                                                app.active_pane = pane_id;
+                                                app.active_tab = tab_idx;
+                                                app.active_tab_id = tab_id;
+                                                app.selection = None;
+                                                let _ = writer
+                                                    .send(ClientMessage::FocusPane {
+                                                        tab_id,
+                                                        pane_id,
+                                                    })
+                                                    .await;
+                                                app.mobile_view = MobileView::Terminal;
+                                                app.mode = InputMode::Normal;
+                                            }
+                                        }
+                                        // Slot 1: action depends on agent status.
+                                        1 => match agent_status {
+                                            orbt_protocol::AgentStatus::Working => {
+                                                let _ = writer
+                                                    .send(ClientMessage::AgentAbort { agent_id })
+                                                    .await;
+                                            }
+                                            orbt_protocol::AgentStatus::Blocked => {
+                                                orbt_tui::tui::widgets::eclipse_modal::open(
+                                                    app, agent_id,
+                                                );
+                                            }
+                                            orbt_protocol::AgentStatus::Error => {
+                                                let _ = writer
+                                                    .send(ClientMessage::AgentRestart { agent_id })
+                                                    .await;
+                                            }
+                                            _ => {
+                                                // [Chat] — focus pane.
+                                                if let Some(pane_id) = agent_pane {
+                                                    let found = app
+                                                        .tabs
+                                                        .iter()
+                                                        .enumerate()
+                                                        .find(|(_, t)| {
+                                                            t.pane_tree.leaves().contains(&pane_id)
+                                                        });
+                                                    let tab_id = found
+                                                        .map(|(_, t)| t.id)
+                                                        .unwrap_or(app.active_tab_id);
+                                                    let tab_idx = found
+                                                        .map(|(i, _)| i)
+                                                        .unwrap_or(app.active_tab);
+                                                    app.active_pane = pane_id;
+                                                    app.active_tab = tab_idx;
+                                                    app.active_tab_id = tab_id;
+                                                    app.selection = None;
+                                                    let _ = writer
+                                                        .send(ClientMessage::FocusPane {
+                                                            tab_id,
+                                                            pane_id,
+                                                        })
+                                                        .await;
+                                                    app.mobile_view = MobileView::Terminal;
+                                                    app.mode = InputMode::Normal;
+                                                }
+                                            }
+                                        },
+                                        // Slot 2: [Detail] for ACP agents; remove/abort for heuristic.
+                                        2 => {
+                                            if is_acp {
+                                                orbt_tui::tui::widgets::agent_detail_modal::open(
+                                                    app, agent_id,
+                                                );
+                                            } else {
+                                                match agent_status {
+                                                    orbt_protocol::AgentStatus::Blocked => {
+                                                        let _ = writer
+                                                            .send(ClientMessage::AgentAbort {
+                                                                agent_id,
+                                                            })
+                                                            .await;
+                                                    }
+                                                    _ => {
+                                                        let _ = writer
+                                                            .send(ClientMessage::AgentRemove {
+                                                                agent_id,
+                                                            })
+                                                            .await;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                    app.needs_redraw = true;
+                                    return;
+                                }
+                            }
+
+                            // Card body click (non-button rows): existing behavior.
                             if mouse.row >= card_y && mouse.row < card_y + slot_h {
                                 match agent_status {
                                     orbt_protocol::AgentStatus::Blocked => {
