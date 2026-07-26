@@ -101,8 +101,9 @@ pub fn status_label(status: &AgentStatus) -> &'static str {
 
 // Returns ([btn_label, is_danger]; 3 slots).
 // `wide` selects full labels (panel >= 25 cols / inner >= 24) vs compact (inner < 24).
-fn card_buttons(status: &AgentStatus, wide: bool) -> [(&'static str, bool); 3] {
-    if wide {
+// When `is_acp` is true, slot 2 is overridden with "[Detail]" (opens Agent Detail modal).
+fn card_buttons(status: &AgentStatus, wide: bool, is_acp: bool) -> [(&'static str, bool); 3] {
+    let mut btns = if wide {
         match status {
             AgentStatus::Working => [("[View]", false), ("[Stop]", false), ("[Chat]", false)],
             AgentStatus::Idle => [("[View]", false), ("[Chat]", false), ("[Remove]", true)],
@@ -118,7 +119,11 @@ fn card_buttons(status: &AgentStatus, wide: bool) -> [(&'static str, bool); 3] {
             AgentStatus::Error => [("[View]", false), ("[Rstr]", false), ("[Rmov]", true)],
             AgentStatus::Done => [("[View]", false), ("[Chat]", false), ("[Rmov]", true)],
         }
+    };
+    if is_acp {
+        btns[2] = ("[Detail]", false);
     }
+    btns
 }
 
 fn truncate_str(s: &str, max: usize) -> String {
@@ -424,6 +429,7 @@ fn render_card_narrow(
     let sc = animated_status_color(&agent.status, app.tick_count);
     let icon = status_icon(&agent.status);
     let label = status_label(&agent.status);
+    let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
 
     let is_selected = if let InputMode::AgentPanel { selected } = &app.mode {
         *selected == card_idx + app.agent_scroll_offset
@@ -540,7 +546,6 @@ fn render_card_narrow(
             _ => String::new(),
         };
 
-        let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
         let badge = if is_acp { " [ACP]" } else { "" };
         let badge_len = badge.len();
         let right = rss_str.unwrap_or_default();
@@ -572,30 +577,50 @@ fn render_card_narrow(
         );
     }
 
-    // slot+3: ▌ + task/block_msg
+    // slot+3: ▌ + task/block_msg (or current ACP tool call when available)
     {
-        let task_str = match agent.status {
-            AgentStatus::Blocked => agent
-                .detail
-                .as_ref()
-                .and_then(|d| d.block_msg.as_deref())
-                .unwrap_or(""),
-            AgentStatus::Working => metrics
-                .and_then(|m| m.recent_lines.first().map(String::as_str))
-                .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
-                .unwrap_or(""),
-            _ => agent
-                .detail
-                .as_ref()
-                .and_then(|d| d.task.as_deref())
-                .unwrap_or(""),
+        let acp_tool = agent
+            .detail
+            .as_ref()
+            .and_then(|d| d.acp.as_ref())
+            .and_then(|a| a.current_tool.as_ref())
+            .filter(|_| {
+                matches!(
+                    agent.status,
+                    AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Error
+                )
+            });
+        let task_str: std::borrow::Cow<str> = if let Some(ct) = acp_tool {
+            std::borrow::Cow::Owned(format!("\u{25B6} {}({})", ct.tool, ct.args_summary))
+        } else {
+            let s = match agent.status {
+                AgentStatus::Blocked => agent
+                    .detail
+                    .as_ref()
+                    .and_then(|d| d.block_msg.as_deref())
+                    .unwrap_or(""),
+                AgentStatus::Working => metrics
+                    .and_then(|m| m.recent_lines.first().map(String::as_str))
+                    .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
+                    .unwrap_or(""),
+                _ => agent
+                    .detail
+                    .as_ref()
+                    .and_then(|d| d.task.as_deref())
+                    .unwrap_or(""),
+            };
+            std::borrow::Cow::Borrowed(s)
         };
-        let task = truncate_str(task_str, w.saturating_sub(1) as usize);
+        let task = truncate_str(&task_str, w.saturating_sub(1) as usize);
         let task_body = format!("{:<width$}", task, width = w.saturating_sub(1) as usize);
-        let (task_fg, task_mod) = match agent.status {
-            AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
-            AgentStatus::Error => (accent_error(), Modifier::empty()),
-            _ => (fg_secondary(), Modifier::empty()),
+        let (task_fg, task_mod) = if acp_tool.is_some() {
+            (sc, Modifier::empty())
+        } else {
+            match agent.status {
+                AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
+                AgentStatus::Error => (accent_error(), Modifier::empty()),
+                _ => (fg_secondary(), Modifier::empty()),
+            }
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -684,7 +709,7 @@ fn render_card_narrow(
 
     // slot+5: ▌ + buttons
     {
-        let buttons = card_buttons(&agent.status, w >= 24);
+        let buttons = card_buttons(&agent.status, w >= 24, is_acp);
         let mut spans = vec![accent_mark];
         for (slot, (btn_label, is_danger)) in buttons.iter().enumerate() {
             if slot > 0 {
@@ -747,6 +772,7 @@ fn render_card_wide(
     let sc = animated_status_color(&agent.status, app.tick_count);
     let icon = status_icon(&agent.status);
     let label = status_label(&agent.status);
+    let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
 
     let is_selected = if let InputMode::AgentPanel { selected } = &app.mode {
         *selected == card_idx + app.agent_scroll_offset
@@ -820,7 +846,6 @@ fn render_card_wide(
             (_, false) => agent.model.clone(),
             _ => String::new(),
         };
-        let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
         let badge = if is_acp { "[ACP]" } else { "" };
         let rss = metrics
             .and_then(|m| m.rss_kb)
@@ -861,30 +886,50 @@ fn render_card_wide(
         );
     }
 
-    // slot+2: task/block_msg
+    // slot+2: task/block_msg (or current ACP tool call when available)
     {
-        let task_str = match agent.status {
-            AgentStatus::Blocked => agent
-                .detail
-                .as_ref()
-                .and_then(|d| d.block_msg.as_deref())
-                .unwrap_or(""),
-            AgentStatus::Working => metrics
-                .and_then(|m| m.recent_lines.first().map(String::as_str))
-                .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
-                .unwrap_or(""),
-            _ => agent
-                .detail
-                .as_ref()
-                .and_then(|d| d.task.as_deref())
-                .unwrap_or(""),
+        let acp_tool = agent
+            .detail
+            .as_ref()
+            .and_then(|d| d.acp.as_ref())
+            .and_then(|a| a.current_tool.as_ref())
+            .filter(|_| {
+                matches!(
+                    agent.status,
+                    AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Error
+                )
+            });
+        let task_str: std::borrow::Cow<str> = if let Some(ct) = acp_tool {
+            std::borrow::Cow::Owned(format!("\u{25B6} {}({})", ct.tool, ct.args_summary))
+        } else {
+            let s = match agent.status {
+                AgentStatus::Blocked => agent
+                    .detail
+                    .as_ref()
+                    .and_then(|d| d.block_msg.as_deref())
+                    .unwrap_or(""),
+                AgentStatus::Working => metrics
+                    .and_then(|m| m.recent_lines.first().map(String::as_str))
+                    .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
+                    .unwrap_or(""),
+                _ => agent
+                    .detail
+                    .as_ref()
+                    .and_then(|d| d.task.as_deref())
+                    .unwrap_or(""),
+            };
+            std::borrow::Cow::Borrowed(s)
         };
-        let task = truncate_str(task_str, iw.saturating_sub(2));
+        let task = truncate_str(&task_str, iw.saturating_sub(2));
         let inner_padded = format!(" {:<iw$}", task, iw = iw.saturating_sub(1));
-        let (task_fg, task_mod) = match agent.status {
-            AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
-            AgentStatus::Error => (accent_error(), Modifier::empty()),
-            _ => (fg_secondary(), Modifier::empty()),
+        let (task_fg, task_mod) = if acp_tool.is_some() {
+            (sc, Modifier::empty())
+        } else {
+            match agent.status {
+                AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
+                AgentStatus::Error => (accent_error(), Modifier::empty()),
+                _ => (fg_secondary(), Modifier::empty()),
+            }
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
@@ -964,7 +1009,7 @@ fn render_card_wide(
 
     // slot+4: buttons [View]  [Stop]              [Chat]
     {
-        let buttons = card_buttons(&agent.status, true); // wide always uses full labels
+        let buttons = card_buttons(&agent.status, true, is_acp); // wide always uses full labels
         let b0 = buttons[0].0;
         let b1 = buttons[1].0;
         let b2 = buttons[2].0;
@@ -1099,6 +1144,11 @@ pub fn card_start_row(
     panel_y + 2 + above_row + blocked_rows + card_idx as u16 * 6
 }
 
+/// Returns the row height of one card slot: 6 for narrow cards (iw < 30), 7 for wide.
+pub fn card_slot_height(iw: u16) -> u16 {
+    if iw < 30 { 6 } else { 7 }
+}
+
 /// Render the Agent Fleet panel as a floating modal centered over `screen`.
 /// Width: 36 cols (fits a wide card), height: up to 80% of screen or 32 rows.
 pub fn render_modal(frame: &mut Frame, screen: Rect, app: &App) {
@@ -1173,4 +1223,36 @@ pub fn render_mobile_agents_header(frame: &mut Frame, area: Rect, app: &App) {
             height: 1,
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::card_buttons;
+    use orbt_protocol::AgentStatus;
+
+    #[test]
+    fn card_buttons_acp_overrides_slot2() {
+        // ACP Working: slot 2 must be [Detail], not [Chat].
+        let btns = card_buttons(&AgentStatus::Working, true, true);
+        assert_eq!(btns[2].0, "[Detail]");
+        assert!(!btns[2].1, "Detail should not be a danger button");
+
+        // Heuristic Working: slot 2 stays [Chat].
+        let btns = card_buttons(&AgentStatus::Working, true, false);
+        assert_eq!(btns[2].0, "[Chat]");
+
+        // ACP Idle: slot 2 is [Detail], not [Remove].
+        let btns = card_buttons(&AgentStatus::Idle, true, true);
+        assert_eq!(btns[2].0, "[Detail]");
+
+        // ACP compact Blocked: slot 2 is [Detail], not [Abrt].
+        let btns = card_buttons(&AgentStatus::Blocked, false, true);
+        assert_eq!(btns[2].0, "[Detail]");
+        assert!(!btns[2].1);
+
+        // Heuristic Blocked compact: slot 2 is [Abrt] and is danger.
+        let btns = card_buttons(&AgentStatus::Blocked, false, false);
+        assert_eq!(btns[2].0, "[Abrt]");
+        assert!(btns[2].1);
+    }
 }
