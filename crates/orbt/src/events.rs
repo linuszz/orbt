@@ -1610,6 +1610,12 @@ async fn handle_mobile_mouse(
                         }
                     }
                     MobileView::Agents => {
+                        // Mobile agents header at row 1 (first content row):
+                        // "[+ New]" occupies the last 7 cols.
+                        if mouse.row == 1 && mouse.column + 7 >= term_w {
+                            orbt_tui::tui::widgets::launch_modal::open(app);
+                            app.needs_redraw = true;
+                        }
                         // Footer row ("[+] Add Agent") is pinned to the last content row.
                         let content_h = nav_row.saturating_sub(1);
                         let footer_row = 1u16 + content_h.saturating_sub(1);
@@ -2178,7 +2184,8 @@ async fn handle_mouse(
                     .map(|a| (a.id, a.pane_id, a.status.clone()))
                     .collect();
                 for (agent_id, agent_pane, agent_status) in visible {
-                    let btn_row = card_row_start + 4;
+                    // Narrow card slot: separator at slot+0, buttons at slot+5.
+                    let btn_row = card_row_start + 5;
                     if mouse.row == btn_row {
                         // Button row of this card
                         let slot = if (1..=6).contains(&col_in_inner) {
@@ -2289,8 +2296,8 @@ async fn handle_mouse(
                         app.needs_redraw = true;
                         return;
                     }
-                    if mouse.row >= card_row_start && mouse.row < card_row_start + 5 {
-                        // Click on card body (not buttons) — focus pane, switching tabs if needed
+                    if mouse.row > card_row_start && mouse.row < card_row_start + 6 {
+                        // Click on card body (not separator, not buttons) — focus pane
                         if let Some(pane_id) = agent_pane {
                             let found = app
                                 .tabs
@@ -2778,9 +2785,10 @@ async fn handle_mouse(
                     let mut found = None;
                     for (card_idx, _) in app.agents.iter().skip(app.agent_scroll_offset).enumerate()
                     {
-                        if mouse.row >= card_row_start && mouse.row < card_row_start + 5 {
+                        // Slot+0 is separator; content rows 1-5; button row = slot+5.
+                        if mouse.row > card_row_start && mouse.row < card_row_start + 6 {
                             let card_row = mouse.row - card_row_start;
-                            if card_row == 4 {
+                            if card_row == 5 {
                                 let slot = if (1..=6).contains(&col_in_inner) {
                                     Some(0u8)
                                 } else if (8..=13).contains(&col_in_inner) {

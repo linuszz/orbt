@@ -278,7 +278,21 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
         }
         MobileView::Agents => {
             frame.render_widget(Clear, content_area);
-            widgets::agent_monitor::render(frame, content_area, app);
+            // Carve off the first content row for the mobile agents header.
+            let agents_header = Rect {
+                x: content_area.x,
+                y: content_area.y,
+                width: content_area.width,
+                height: 1,
+            };
+            let agents_area = Rect {
+                x: content_area.x,
+                y: content_area.y + 1,
+                width: content_area.width,
+                height: content_area.height.saturating_sub(1),
+            };
+            widgets::agent_monitor::render_mobile_agents_header(frame, agents_header, app);
+            widgets::agent_monitor::render(frame, agents_area, app);
             if app.eclipse_modal.is_some() {
                 widgets::eclipse_modal::render(frame, content_area, app);
             }
@@ -927,9 +941,10 @@ mod tests {
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
         });
-        let mut app = App::from_welcome(&state, 120, 30);
+        // 140 cols = Ultra mode: 25-col agent panel (iw=24), enough room for the full name.
+        let mut app = App::from_welcome(&state, 140, 30);
         app.agent_panel_mode = AgentPanelMode::Sidebar;
-        let backend = TestBackend::new(120, 30);
+        let backend = TestBackend::new(140, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
 

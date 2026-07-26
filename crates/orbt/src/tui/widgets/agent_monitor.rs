@@ -88,13 +88,14 @@ fn animated_status_color(status: &AgentStatus, tick: u64) -> ratatui::style::Col
     }
 }
 
+/// Bracket-form status label for inline card display (§3.2 design spec).
 pub fn status_label(status: &AgentStatus) -> &'static str {
     match status {
-        AgentStatus::Working => "Working",
-        AgentStatus::Idle => "Standby",
-        AgentStatus::Blocked => "Eclipse",
-        AgentStatus::Error => "Debris",
-        AgentStatus::Done => "Done",
+        AgentStatus::Working => "[Working]",
+        AgentStatus::Idle => "[Standby]",
+        AgentStatus::Blocked => "[Blocked!]",
+        AgentStatus::Error => "[Error]",
+        AgentStatus::Done => "[Done]",
     }
 }
 
@@ -158,7 +159,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     frame.render_widget(block, area);
 
     let ix = area.x + 1; // inner x (after left border)
-    let iw = area.width.saturating_sub(1); // inner width = 21
+    let iw = area.width.saturating_sub(1); // inner width
 
     let any_blocked = app.agents.iter().any(|a| a.status == AgentStatus::Blocked);
     let blocked_agents: Vec<&AgentInfo> = app
@@ -171,7 +172,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     {
         let n = app.agents.len();
         let badge = format!("[{}]", n);
-        // Badge pulses with smooth Blocked animation when any agent is blocked.
         let badge_color = if any_blocked {
             blocked_pulse_color(app.tick_count)
         } else {
@@ -179,7 +179,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         };
         // right side: "[+]×" = 4 chars
         let right_chars = 4u16;
-        let fill = iw.saturating_sub(10 + 1 + badge.len() as u16 + right_chars) as usize;
+        let fill = iw.saturating_sub(6 + 1 + badge.len() as u16 + right_chars) as usize;
 
         let (add_fg, add_bg) = if app.agent_hovered == Some(AgentHover::HeaderAdd) {
             (bg_primary(), accent_hover())
@@ -195,7 +195,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(
-                    "SATELLITES",
+                    "AGENTS",
                     Style::default()
                         .fg(fg_primary())
                         .add_modifier(Modifier::BOLD),
@@ -254,9 +254,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             format!("{} agents", blocked_agents.len())
         };
-        // Eclipse icon pulses with smooth Blocked animation (48-tick / ~0.8 s cycle).
         let icon_color = blocked_pulse_color(app.tick_count);
-        // " Eclipse — {name}" — spec §3.1 format (em dash U+2014)
         let prefix = " Eclipse \u{2014} ";
         let name_max = (iw as usize).saturating_sub(1 + prefix.len());
         let name_trunc = truncate_str(&name_part, name_max.max(2));
@@ -291,13 +289,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         } else {
             (accent_blocked(), bg_tertiary())
         };
-        // Show block_msg preview to the left of [Respond] if available.
         let block_preview = blocked_agents
             .first()
             .and_then(|a| a.detail.as_ref())
             .and_then(|d| d.block_msg.as_deref())
             .unwrap_or("");
-        // Layout: " {preview:<fill}[Respond]", fill = iw - 1 - 9
         let fill = (iw as usize).saturating_sub(10);
         let preview_trunc = truncate_str(block_preview, fill);
         let preview_padded = format!("{:<fill$}", preview_trunc, fill = fill);
@@ -358,11 +354,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         let visible_agents: Vec<&AgentInfo> =
             app.agents.iter().skip(app.agent_scroll_offset).collect();
         let total = app.agents.len();
-        // Reserve 1 row at the bottom for the "[+] Add Agent" footer.
+        let is_wide = iw >= 30;
+        // Narrow slot: separator(1) + 5 content rows = 6. Wide slot: top/content/bottom/gap = 7.
+        let min_slot: u16 = if is_wide { 7 } else { 6 };
+        // Reserve 1 row at the bottom for the footer.
         let content_bottom = area.y + area.height.saturating_sub(1);
         for (card_idx, agent) in visible_agents.iter().enumerate() {
-            if y + 5 > content_bottom {
-                // Show "▼ N more" indicator when cards are truncated (above footer).
+            if y + min_slot > content_bottom {
                 let remaining = total - app.agent_scroll_offset - card_idx;
                 if remaining > 0 && content_bottom >= 1 && y < content_bottom {
                     let more_text = format!(" \u{25BE} {} more", remaining);
@@ -379,27 +377,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 break;
             }
             let metrics = app.agent_metrics.get(&agent.id);
-            render_card(frame, ix, y, iw, agent, card_idx, app, metrics);
-            y += 5;
-            if card_idx + 1 < visible_agents.len() && y < content_bottom {
-                // Blank separator row between cards (per design spec §5.1).
-                frame.render_widget(
-                    Paragraph::new("").style(Style::default().bg(bg_secondary())),
-                    Rect {
-                        x: ix,
-                        y,
-                        width: iw,
-                        height: 1,
-                    },
-                );
-                y += 1;
-            }
+            let slot_h = render_card(frame, ix, y, iw, agent, card_idx, app, metrics);
+            y += slot_h;
         }
     }
 
     render_footer(frame, ix, iw, area, app);
 }
 
+/// Dispatch to narrow or wide card renderer. Returns rows consumed (slot height).
 fn render_card(
     frame: &mut Frame,
     x: u16,
@@ -409,47 +395,68 @@ fn render_card(
     card_idx: usize,
     app: &App,
     metrics: Option<&AgentMetrics>,
-) {
+) -> u16 {
+    if w < 30 {
+        render_card_narrow(frame, x, y, w, agent, card_idx, app, metrics)
+    } else {
+        render_card_wide(frame, x, y, w, agent, card_idx, app, metrics)
+    }
+}
+
+/// Narrow card (iw < 30): separator rule + 5 content rows. Returns slot height 6.
+/// Slot layout:
+///   slot+0: ─ separator rule
+///   slot+1: ● name  [Status] dur
+///   slot+2: ▌ cwd · model  [ACP]
+///   slot+3: ▌ task/block_msg
+///   slot+4: ▌ progress bar
+///   slot+5: ▌ [View] [Stop] [Chat]
+fn render_card_narrow(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    w: u16,
+    agent: &AgentInfo,
+    card_idx: usize,
+    app: &App,
+    metrics: Option<&AgentMetrics>,
+) -> u16 {
     let sc = animated_status_color(&agent.status, app.tick_count);
     let icon = status_icon(&agent.status);
     let label = status_label(&agent.status);
 
-    // Keyboard selection: card is highlighted when AgentPanel nav mode targets it.
     let is_selected = if let InputMode::AgentPanel { selected } = &app.mode {
         *selected == card_idx + app.agent_scroll_offset
     } else {
         false
     };
-    let card_bg = if is_selected {
-        bg_card()
+    let card_bg = if is_selected { bg_card() } else { bg_secondary() };
+
+    // Selection/status mark for rows 2-5 (▸ selected, ▌ animated otherwise).
+    let accent_mark = if is_selected {
+        Span::styled("\u{25B8}", Style::default().fg(accent()).bg(card_bg))
     } else {
-        bg_secondary()
-    };
-    // Leading accent mark: orange ▸ for keyboard-selected cards; animated ▌ for blocked/error
-    // cards (left-border accent, spec §3.3 "边框: Warning"); plain space otherwise.
-    let sel_mark = if is_selected {
-        Span::styled("\u{25B8}", Style::default().fg(accent()).bg(card_bg)) // ▸ orange selection
-    } else {
-        match agent.status {
-            AgentStatus::Blocked => Span::styled(
-                "\u{258C}", // ▌ half-block left border
-                Style::default()
-                    .fg(blocked_pulse_color(app.tick_count))
-                    .bg(card_bg),
-            ),
-            AgentStatus::Error => Span::styled(
-                "\u{258C}",
-                Style::default()
-                    .fg(error_blink_color(app.tick_count))
-                    .bg(card_bg),
-            ),
-            _ => Span::styled(" ", Style::default().bg(card_bg)),
-        }
+        Span::styled(
+            "\u{258C}",
+            Style::default().fg(sc).bg(card_bg),
+        )
     };
 
-    // Row 0: icon + sel_mark + name (left) + status + dur (right-aligned).
-    // Layout: icon(1) + mark(1) + name_padded + " " + right_part
-    // right_part = "{label} {dur}" or just "{label}" when duration=0.
+    // slot+0: separator rule
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            "\u{2500}".repeat(w as usize),
+            Style::default().fg(border()).bg(bg_secondary()),
+        )),
+        Rect {
+            x,
+            y,
+            width: w,
+            height: 1,
+        },
+    );
+
+    // slot+1: icon + name + [Status] + dur
     {
         let duration_s = app
             .agent_start_times
@@ -457,20 +464,31 @@ fn render_card(
             .map(|t| t.elapsed().as_secs() as u32)
             .or_else(|| agent.detail.as_ref().map(|d| d.duration_s))
             .unwrap_or(0);
-        let right_part = if duration_s > 0 {
-            format!("{} {}", label, format_duration(duration_s))
+        let dur_str = if duration_s > 0 {
+            format!(" {}", format_duration(duration_s))
         } else {
-            label.to_string()
+            String::new()
         };
-        // name fills the space between icon+mark(2) and " "+right_part.
-        let right_len = (1 + right_part.len()) as u16; // leading space + right_part
-        let name_w = w.saturating_sub(2 + right_len) as usize;
+        // icon(1) + space(1) + name_padded + space(1) + label + dur_str = w
+        let right_total = 1 + label.len() + dur_str.len();
+        let name_w = (w as usize).saturating_sub(2 + right_total);
         let name = truncate_str(&agent.name, name_w);
         let name_padded = format!("{:<width$}", name, width = name_w);
+        let label_color = match agent.status {
+            AgentStatus::Working => accent(),
+            AgentStatus::Blocked => accent_blocked(),
+            AgentStatus::Error => accent_error(),
+            _ => fg_muted(),
+        };
+        let label_mod = if agent.status == AgentStatus::Blocked {
+            Modifier::BOLD
+        } else {
+            Modifier::empty()
+        };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
                 Span::styled(icon, Style::default().fg(sc).bg(card_bg)),
-                sel_mark.clone(),
+                Span::styled(" ", Style::default().bg(card_bg)),
                 Span::styled(
                     name_padded,
                     Style::default()
@@ -479,21 +497,28 @@ fn render_card(
                         .add_modifier(Modifier::BOLD),
                 ),
                 Span::styled(" ", Style::default().bg(card_bg)),
-                Span::styled(right_part, Style::default().fg(sc).bg(card_bg)),
+                Span::styled(
+                    label,
+                    Style::default()
+                        .fg(label_color)
+                        .bg(card_bg)
+                        .add_modifier(label_mod),
+                ),
+                Span::styled(dur_str, Style::default().fg(fg_muted()).bg(card_bg)),
             ])),
             Rect {
                 x,
-                y,
+                y: y + 1,
                 width: w,
                 height: 1,
             },
         );
     }
 
-    // Row 1: sel_mark + "cwd · model" + optional "[ACP]" badge + rss (right-aligned).
+    // slot+2: ▌ + cwd · model + [ACP] + rss
     {
         let rss_str = metrics.and_then(|m| m.rss_kb).map(format_rss);
-        let inner_w = w.saturating_sub(1) as usize; // sel_mark takes col 0
+        let inner_w = w.saturating_sub(1) as usize;
 
         let cwd_short = app
             .spaces
@@ -518,38 +543,36 @@ fn render_card(
         let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
         let badge = if is_acp { " [ACP]" } else { "" };
         let badge_len = badge.len();
-
         let right = rss_str.unwrap_or_default();
         let right_w = if right.is_empty() { 0 } else { right.len() + 1 };
         let left_max = inner_w.saturating_sub(badge_len + right_w);
         let left = truncate_str(&left_content, left_max);
         let pad = inner_w.saturating_sub(left.len() + badge_len + right_w);
 
-        let mut row1_spans = vec![
-            sel_mark.clone(),
+        let mut row_spans = vec![
+            accent_mark.clone(),
             Span::styled(left, Style::default().fg(fg_muted()).bg(card_bg)),
         ];
         if is_acp {
-            row1_spans
-                .push(Span::styled(badge, Style::default().fg(accent_idle()).bg(card_bg)));
+            row_spans.push(Span::styled(badge, Style::default().fg(accent_idle()).bg(card_bg)));
         }
-        row1_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(card_bg)));
+        row_spans.push(Span::styled(" ".repeat(pad), Style::default().bg(card_bg)));
         if !right.is_empty() {
-            row1_spans.push(Span::styled(right, Style::default().fg(fg_muted()).bg(card_bg)));
+            row_spans.push(Span::styled(right, Style::default().fg(fg_muted()).bg(card_bg)));
         }
 
         frame.render_widget(
-            Paragraph::new(Line::from(row1_spans)),
+            Paragraph::new(Line::from(row_spans)),
             Rect {
                 x,
-                y: y + 1,
+                y: y + 2,
                 width: w,
                 height: 1,
             },
         );
     }
 
-    // Row 2: task/block_msg; when Working, prefer live recent_lines activity.
+    // slot+3: ▌ + task/block_msg
     {
         let task_str = match agent.status {
             AgentStatus::Blocked => agent
@@ -557,13 +580,10 @@ fn render_card(
                 .as_ref()
                 .and_then(|d| d.block_msg.as_deref())
                 .unwrap_or(""),
-            AgentStatus::Working => {
-                // Show live activity line when available; fall back to task.
-                metrics
-                    .and_then(|m| m.recent_lines.first().map(String::as_str))
-                    .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
-                    .unwrap_or("")
-            }
+            AgentStatus::Working => metrics
+                .and_then(|m| m.recent_lines.first().map(String::as_str))
+                .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
+                .unwrap_or(""),
             _ => agent
                 .detail
                 .as_ref()
@@ -572,8 +592,6 @@ fn render_card(
         };
         let task = truncate_str(task_str, w.saturating_sub(1) as usize);
         let task_body = format!("{:<width$}", task, width = w.saturating_sub(1) as usize);
-        // Blocked: block reason highlighted in accent_blocked() + Bold (spec §7.1 Level 2).
-        // Error: error text in accent_error().
         let (task_fg, task_mod) = match agent.status {
             AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
             AgentStatus::Error => (accent_error(), Modifier::empty()),
@@ -581,7 +599,7 @@ fn render_card(
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
-                sel_mark.clone(),
+                accent_mark.clone(),
                 Span::styled(
                     task_body,
                     Style::default()
@@ -592,14 +610,14 @@ fn render_card(
             ])),
             Rect {
                 x,
-                y: y + 2,
+                y: y + 3,
                 width: w,
                 height: 1,
             },
         );
     }
 
-    // Row 3: progress bar (Working/Blocked/Error show bar; spec §3.3).
+    // slot+4: ▌ + progress bar
     {
         let show_bar = matches!(
             agent.status,
@@ -607,7 +625,6 @@ fn render_card(
         );
         let progress = agent.detail.as_ref().and_then(|d| d.progress);
         if show_bar {
-            // " " + bar (w-5) + suffix (4) = w
             let bar_w = w.saturating_sub(5) as usize;
             let (bar, suffix) = if let Some(pct) = progress {
                 let pct = pct.clamp(0.0, 1.0);
@@ -615,7 +632,6 @@ fn render_card(
                 let b = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(bar_w - filled);
                 (b, format!("{:3.0}%", pct * 100.0))
             } else {
-                // Indeterminate: 4-cell window scrolling over bar_w cells.
                 let window = 4usize;
                 let cycle = (bar_w + window + 2) as u64;
                 let pos = ((app.tick_count / 5) % cycle) as usize;
@@ -628,7 +644,6 @@ fn render_card(
                         }
                     })
                     .collect();
-                // Suffix: show cpu% when available, else blank (4 chars).
                 let sfx = metrics
                     .and_then(|m| m.cpu_percent)
                     .map(|c| format!("{:3.0}%", c))
@@ -637,13 +652,13 @@ fn render_card(
             };
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    sel_mark.clone(),
+                    accent_mark.clone(),
                     Span::styled(bar, Style::default().fg(sc).bg(card_bg)),
                     Span::styled(suffix, Style::default().fg(fg_muted()).bg(card_bg)),
                 ])),
                 Rect {
                     x,
-                    y: y + 3,
+                    y: y + 4,
                     width: w,
                     height: 1,
                 },
@@ -651,7 +666,7 @@ fn render_card(
         } else {
             frame.render_widget(
                 Paragraph::new(Line::from(vec![
-                    sel_mark.clone(),
+                    accent_mark.clone(),
                     Span::styled(
                         " ".repeat(w.saturating_sub(1) as usize),
                         Style::default().bg(card_bg),
@@ -659,7 +674,7 @@ fn render_card(
                 ])),
                 Rect {
                     x,
-                    y: y + 3,
+                    y: y + 4,
                     width: w,
                     height: 1,
                 },
@@ -667,10 +682,10 @@ fn render_card(
         }
     }
 
-    // Row 4: sel_mark + [Btn1] + " " + [Btn2] + " " + [Btn3] = 1+6+1+6+1+6 = 21
+    // slot+5: ▌ + buttons
     {
         let buttons = card_buttons(&agent.status, w >= 24);
-        let mut spans = vec![sel_mark];
+        let mut spans = vec![accent_mark];
         for (slot, (btn_label, is_danger)) in buttons.iter().enumerate() {
             if slot > 0 {
                 spans.push(Span::styled(" ", Style::default().bg(card_bg)));
@@ -700,12 +715,352 @@ fn render_card(
             Paragraph::new(Line::from(spans)),
             Rect {
                 x,
+                y: y + 5,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    6 // slot height: separator(1) + 5 content rows
+}
+
+/// Wide card (iw >= 30): full box border. Returns slot height 7.
+/// Slot layout:
+///   slot+0: ┌─● name ─── [Status] dur ─┐  (border color = animated status)
+///   slot+1: │ cwd · model       [ACP]   │
+///   slot+2: │ task/block_msg            │
+///   slot+3: │ progress bar   cpu%       │
+///   slot+4: │ [View]  [Stop]   [Chat]   │
+///   slot+5: └───────────────────────────┘  (border color)
+///   slot+6: blank gap
+fn render_card_wide(
+    frame: &mut Frame,
+    x: u16,
+    y: u16,
+    w: u16,
+    agent: &AgentInfo,
+    card_idx: usize,
+    app: &App,
+    metrics: Option<&AgentMetrics>,
+) -> u16 {
+    let sc = animated_status_color(&agent.status, app.tick_count);
+    let icon = status_icon(&agent.status);
+    let label = status_label(&agent.status);
+
+    let is_selected = if let InputMode::AgentPanel { selected } = &app.mode {
+        *selected == card_idx + app.agent_scroll_offset
+    } else {
+        false
+    };
+    let card_bg = if is_selected { bg_card() } else { bg_secondary() };
+    let top_color = if is_selected { accent() } else { sc };
+    let side_color = border();
+
+    let duration_s = app
+        .agent_start_times
+        .get(&agent.id)
+        .map(|t| t.elapsed().as_secs() as u32)
+        .or_else(|| agent.detail.as_ref().map(|d| d.duration_s))
+        .unwrap_or(0);
+    let dur_str = if duration_s > 0 {
+        format!(" {}", format_duration(duration_s))
+    } else {
+        String::new()
+    };
+
+    // slot+0: top border ┌─icon name ──── [Status] dur ─┐
+    {
+        // ┌─(2) + icon(1) + space(1) + name + ─*fill + label + dur_str + ─┐(2) = w
+        let fixed = 6 + label.len() + dur_str.len();
+        let name_max = (w as usize).saturating_sub(fixed + 1);
+        let name_trunc = truncate_str(&agent.name, name_max);
+        let fill_w = (w as usize)
+            .saturating_sub(fixed + name_trunc.chars().count())
+            .max(1);
+        let top = format!(
+            "\u{250C}\u{2500}{} {}{}{}{}\u{2500}\u{2510}",
+            icon,
+            name_trunc,
+            "\u{2500}".repeat(fill_w),
+            label,
+            dur_str,
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                top,
+                Style::default().fg(top_color).bg(card_bg),
+            )),
+            Rect {
+                x,
+                y,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    let iw = w.saturating_sub(2) as usize;
+
+    // slot+1: cwd · model + badge + rss
+    {
+        let cwd_short = app
+            .spaces
+            .iter()
+            .find(|s| s.space_id == agent.space_id)
+            .and_then(|s| {
+                std::path::Path::new(&s.cwd)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .map(str::to_string)
+            });
+        let raw_left = match (&cwd_short, agent.model.is_empty()) {
+            (Some(cwd), false) if !cwd.is_empty() => format!("{} \u{00B7} {}", cwd, agent.model),
+            (Some(cwd), true) if !cwd.is_empty() => cwd.clone(),
+            (_, false) => agent.model.clone(),
+            _ => String::new(),
+        };
+        let is_acp = !matches!(agent.protocol, AgentProtocol::Heuristic);
+        let badge = if is_acp { "[ACP]" } else { "" };
+        let rss = metrics
+            .and_then(|m| m.rss_kb)
+            .map(format_rss)
+            .unwrap_or_default();
+        let right = match (is_acp, rss.is_empty()) {
+            (true, true) => format!(" {}", badge),
+            (true, false) => format!(" {} {}", badge, rss),
+            (false, false) => format!(" {}", rss),
+            _ => String::new(),
+        };
+        let left_max = iw.saturating_sub(right.len() + 1); // +1 for leading space
+        let left = truncate_str(&raw_left, left_max);
+        let inner_content = format!(
+            " {}{}{} ",
+            left,
+            " ".repeat(
+                iw.saturating_sub(1 + left.chars().count() + right.len() + 1)
+            ),
+            right.trim_start()
+        );
+        let inner_padded = format!("{:<iw$}", inner_content, iw = iw);
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+                Span::styled(
+                    inner_padded,
+                    Style::default().fg(fg_secondary()).bg(card_bg),
+                ),
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+            ])),
+            Rect {
+                x,
+                y: y + 1,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    // slot+2: task/block_msg
+    {
+        let task_str = match agent.status {
+            AgentStatus::Blocked => agent
+                .detail
+                .as_ref()
+                .and_then(|d| d.block_msg.as_deref())
+                .unwrap_or(""),
+            AgentStatus::Working => metrics
+                .and_then(|m| m.recent_lines.first().map(String::as_str))
+                .or_else(|| agent.detail.as_ref().and_then(|d| d.task.as_deref()))
+                .unwrap_or(""),
+            _ => agent
+                .detail
+                .as_ref()
+                .and_then(|d| d.task.as_deref())
+                .unwrap_or(""),
+        };
+        let task = truncate_str(task_str, iw.saturating_sub(2));
+        let inner_padded = format!(" {:<iw$}", task, iw = iw.saturating_sub(1));
+        let (task_fg, task_mod) = match agent.status {
+            AgentStatus::Blocked => (accent_blocked(), Modifier::BOLD),
+            AgentStatus::Error => (accent_error(), Modifier::empty()),
+            _ => (fg_secondary(), Modifier::empty()),
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+                Span::styled(
+                    inner_padded,
+                    Style::default()
+                        .fg(task_fg)
+                        .bg(card_bg)
+                        .add_modifier(task_mod),
+                ),
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+            ])),
+            Rect {
+                x,
+                y: y + 2,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    // slot+3: progress bar
+    {
+        let show_bar = matches!(
+            agent.status,
+            AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Error
+        );
+        let progress = agent.detail.as_ref().and_then(|d| d.progress);
+        let inner_padded = if show_bar {
+            // " " + bar(bar_w) + "  " + suffix(4) + " " = bar_w + 8 = iw → bar_w = iw - 8
+            let bar_w = iw.saturating_sub(8).max(1);
+            let (bar, suffix) = if let Some(pct) = progress {
+                let pct = pct.clamp(0.0, 1.0);
+                let filled = (pct * bar_w as f32) as usize;
+                let b = "\u{2588}".repeat(filled) + &"\u{2591}".repeat(bar_w - filled);
+                (b, format!("{:3.0}%", pct * 100.0))
+            } else {
+                let window = 4usize;
+                let cycle = (bar_w + window + 2) as u64;
+                let pos = ((app.tick_count / 5) % cycle) as usize;
+                let b: String = (0..bar_w)
+                    .map(|c| {
+                        if c >= pos && c < pos + window {
+                            "\u{2588}"
+                        } else {
+                            "\u{2591}"
+                        }
+                    })
+                    .collect();
+                let sfx = metrics
+                    .and_then(|m| m.cpu_percent)
+                    .map(|c| format!("{:3.0}%", c))
+                    .unwrap_or_else(|| "    ".to_string());
+                (b, sfx)
+            };
+            // Pad to exactly iw
+            let raw = format!(" {}  {} ", bar, suffix);
+            format!("{:<iw$}", raw, iw = iw)
+        } else {
+            " ".repeat(iw)
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+                Span::styled(inner_padded, Style::default().fg(sc).bg(card_bg)),
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+            ])),
+            Rect {
+                x,
+                y: y + 3,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    // slot+4: buttons [View]  [Stop]              [Chat]
+    {
+        let buttons = card_buttons(&agent.status, true); // wide always uses full labels
+        let b0 = buttons[0].0;
+        let b1 = buttons[1].0;
+        let b2 = buttons[2].0;
+        let b2_danger = buttons[2].1;
+        // Layout: " " + b0 + "  " + b1 + fill + b2 + " "
+        let fixed = 1 + b0.len() + 2 + b1.len() + b2.len() + 1;
+        let fill_w = iw.saturating_sub(fixed);
+
+        let h0 = app.agent_hovered == Some(AgentHover::CardBtn { card_idx, slot: 0 });
+        let h1 = app.agent_hovered == Some(AgentHover::CardBtn { card_idx, slot: 1 });
+        let h2 = app.agent_hovered == Some(AgentHover::CardBtn { card_idx, slot: 2 });
+
+        let (f0, bg0) = if h0 {
+            (bg_primary(), accent_hover())
+        } else {
+            (fg_muted(), card_bg)
+        };
+        let (f1, bg1) = if h1 {
+            (bg_primary(), accent_hover())
+        } else {
+            (fg_muted(), card_bg)
+        };
+        let (f2, bg2) = if h2 {
+            (bg_primary(), if b2_danger { accent_error() } else { accent_hover() })
+        } else if b2_danger {
+            (accent_error(), card_bg)
+        } else {
+            (fg_muted(), card_bg)
+        };
+
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+                Span::styled(" ", Style::default().bg(card_bg)),
+                Span::styled(b0, Style::default().fg(f0).bg(bg0)),
+                Span::styled("  ", Style::default().bg(card_bg)),
+                Span::styled(b1, Style::default().fg(f1).bg(bg1)),
+                Span::styled(" ".repeat(fill_w), Style::default().bg(card_bg)),
+                Span::styled(b2, Style::default().fg(f2).bg(bg2)),
+                Span::styled(" ", Style::default().bg(card_bg)),
+                Span::styled("\u{2502}", Style::default().fg(side_color).bg(card_bg)),
+            ])),
+            Rect {
+                x,
                 y: y + 4,
                 width: w,
                 height: 1,
             },
         );
     }
+
+    // slot+5: bottom border
+    {
+        let bot_color = match agent.status {
+            AgentStatus::Blocked => {
+                if is_selected {
+                    accent()
+                } else {
+                    blocked_pulse_color(app.tick_count)
+                }
+            }
+            _ => side_color,
+        };
+        let bottom = format!(
+            "\u{2514}{}\u{2518}",
+            "\u{2500}".repeat(w.saturating_sub(2) as usize)
+        );
+        frame.render_widget(
+            Paragraph::new(Span::styled(
+                bottom,
+                Style::default().fg(bot_color).bg(card_bg),
+            )),
+            Rect {
+                x,
+                y: y + 5,
+                width: w,
+                height: 1,
+            },
+        );
+    }
+
+    // slot+6: blank gap row
+    frame.render_widget(
+        Paragraph::new(Span::styled(
+            " ".repeat(w as usize),
+            Style::default().bg(bg_secondary()),
+        )),
+        Rect {
+            x,
+            y: y + 6,
+            width: w,
+            height: 1,
+        },
+    );
+
+    7 // slot height: top border + 4 content + bottom border + gap
 }
 
 /// Footer: "[+] Add Agent" pinned to the last row of the agent panel.
@@ -728,7 +1083,8 @@ fn render_footer(frame: &mut Frame, ix: u16, iw: u16, area: Rect, app: &App) {
     );
 }
 
-/// Returns the row (absolute) where agent card `card_idx` starts, given panel geometry.
+/// Returns the row (absolute) where agent card slot `card_idx` starts, given panel geometry.
+/// For narrow cards, this is the separator row (slot row 0). Button row = this + 5.
 /// `panel_y`: top row of the agent panel.
 /// `scroll_offset`: number of agents scrolled past (adds 1 row for "N above" indicator).
 /// `any_blocked`: whether the eclipse banner is showing (adds 2 rows).
@@ -744,12 +1100,12 @@ pub fn card_start_row(
 }
 
 /// Render the Agent Fleet panel as a floating modal centered over `screen`.
-/// Width: 36 cols (fits a full card), height: up to 80% of screen or 32 rows.
+/// Width: 36 cols (fits a wide card), height: up to 80% of screen or 32 rows.
 pub fn render_modal(frame: &mut Frame, screen: Rect, app: &App) {
     let modal_w: u16 = 36.min(screen.width.saturating_sub(4));
     let n = app.agents.len().max(1);
-    // Each card is 6 rows; add 4 for header + footer.
-    let content_h = (n as u16 * 6 + 4).min((screen.height * 4 / 5).max(10));
+    // Wide cards are 7 rows each; add 4 for header + footer.
+    let content_h = (n as u16 * 7 + 4).min((screen.height * 4 / 5).max(10));
     let modal_h = content_h.min(screen.height.saturating_sub(4));
 
     let x = screen.x + screen.width.saturating_sub(modal_w) / 2;
@@ -761,10 +1117,8 @@ pub fn render_modal(frame: &mut Frame, screen: Rect, app: &App) {
         height: modal_h,
     };
 
-    // Clear background area to avoid bleed-through from pane content.
     frame.render_widget(Clear, area);
 
-    // Outer border with title.
     let title = format!(" Agent Fleet ({}) ", app.agents.len());
     let mode_hint = " [a] close  [Tab] sidebar ";
     let block = Block::default()
@@ -775,6 +1129,48 @@ pub fn render_modal(frame: &mut Frame, screen: Rect, app: &App) {
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Render the panel content into the inner area (reuse sidebar render logic).
     render(frame, inner, app);
+}
+
+/// Mobile agents header row: " AGENTS (N)        [+ New]"
+/// Call this before passing a sub-area (without the header row) to render().
+pub fn render_mobile_agents_header(frame: &mut Frame, area: Rect, app: &App) {
+    let w = area.width;
+    let n = app.agents.len();
+    let any_blocked = app.agents.iter().any(|a| a.status == AgentStatus::Blocked);
+
+    let count_label = format!("({})", n);
+    let count_color = if any_blocked {
+        blocked_pulse_color(app.tick_count)
+    } else {
+        fg_muted()
+    };
+
+    // " AGENTS "(8) + count_label + fill + "[+ New]"(7) = w
+    let new_btn = "[+ New]";
+    let new_btn_len = new_btn.len() as u16;
+    let fill = w
+        .saturating_sub(8 + count_label.len() as u16 + new_btn_len)
+        as usize;
+
+    frame.render_widget(
+        Paragraph::new(Line::from(vec![
+            Span::styled(
+                " AGENTS ",
+                Style::default()
+                    .fg(fg_primary())
+                    .bg(bg_tertiary())
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(count_label, Style::default().fg(count_color).bg(bg_tertiary())),
+            Span::styled(" ".repeat(fill), Style::default().bg(bg_tertiary())),
+            Span::styled(new_btn, Style::default().fg(fg_muted()).bg(bg_tertiary())),
+        ])),
+        Rect {
+            x: area.x,
+            y: area.y,
+            width: w,
+            height: 1,
+        },
+    );
 }
