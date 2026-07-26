@@ -3,8 +3,8 @@ use std::time::Instant;
 
 use orbt_core::VtParser;
 use orbt_protocol::{
-    AgentId, AgentInfo, AgentMetrics, AgentStatus, Cell, CellGrid, FileTouched, FullState,
-    PaneId, PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
+    AgentId, AgentInfo, AgentMetrics, AgentStatus, Cell, CellGrid, FileTouched, FullState, PaneId,
+    PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
 /// Which column has keyboard focus in the mobile SPACES two-column view.
@@ -1181,12 +1181,34 @@ impl App {
 }
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use super::*;
     use orbt_protocol::{
         AgentDetail, AgentInfo, AgentStatus, CellGrid, FullState, PaneInfo, PaneLayout, SpaceInfo,
         TabInfo,
     };
+
+    /// Build a minimal App with one heuristic Working agent for widget smoke tests.
+    pub fn make_test_app(w: u16, h: u16) -> App {
+        let mut state = minimal_state();
+        state.agents.push(AgentInfo {
+            id: AgentId(1),
+            name: "test-agent".to_string(),
+            space_id: SpaceId(1),
+            model: "claude".to_string(),
+            status: AgentStatus::Working,
+            pane_id: Some(PaneId(1)),
+            detail: Some(AgentDetail {
+                task: Some("Test task".to_string()),
+                block_msg: None,
+                progress: Some(0.4),
+                duration_s: 60,
+                acp: None,
+            }),
+            protocol: orbt_protocol::AgentProtocol::Heuristic,
+        });
+        App::from_welcome(&state, w, h)
+    }
 
     /// Helper: build a minimal FullState for constructing App instances in tests.
     fn minimal_state() -> FullState {
@@ -1228,6 +1250,7 @@ mod tests {
                 block_msg: None,
                 progress: None,
                 duration_s: 0,
+                acp: None,
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
         }
