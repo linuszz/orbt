@@ -1,10 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-07-19
-**Commit:** 601117c (v0.1.9-11-g601117c)
+**Generated:** 2026-07-28
+**Commit:** 7ed567b (v0.1.11)
 **Branch:** main
 
-Public release: **v0.1.10** (target tag — not yet shipped). Development HEAD is 11 commits ahead.
+Public release: **v0.1.11** (2026-07-28). Development HEAD is at this release.
 
 ## OVERVIEW
 
@@ -23,10 +23,11 @@ orbit/
 │   │       │   ├── mod.rs / agent.rs / io.rs / ipc.rs / pty.rs / session.rs
 │   │       └── tui/
 │   │           ├── mod.rs / theme.rs
-│   │           └── widgets/           # 13 widget files
+│   │           └── widgets/           # 14 widget files
 │   │               ├── agent_monitor.rs     # Satellites panel
 │   │               ├── eclipse_modal.rs     # Blocked-agent intervention
 │   │               ├── launch_modal.rs      # Agent type picker
+│   │               ├── agent_detail_modal.rs     # ACP agent detail overlay
 │   │               ├── spaces_sidebar.rs    # Multi-space sidebar
 │   │               ├── command_palette.rs   # Flight Deck overlay
 │   │               ├── status_bar.rs
@@ -46,9 +47,9 @@ orbit/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| IPC types/contract | `orbt-protocol/src/messages.rs` | Wire contract -- source of truth (40 variants: 25 ClientMessage + 15 ServerEvent) |
+| IPC types/contract | `orbt-protocol/src/messages.rs` | Wire contract -- source of truth (41 variants: 25 ClientMessage + 16 ServerEvent) |
 | Protocol encode/decode | `orbt-protocol/src/encoding.rs` | bincode 2.x serde helpers |
-| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 2793 lines |
+| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 3274 lines |
 | Server session/PTY | `orbt/src/daemon/session.rs` / `pty.rs` | Tab management, PTY spawn |
 | **Agent runtime** | `orbt/src/daemon/agent.rs` | Detection, Eclipse, metrics -- `AgentRegistry` |
 | Client IPC writer | `orbt/src/ipc.rs` | Background channel -- socket task |
@@ -61,8 +62,8 @@ orbit/
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `ClientMessage` | enum | `orbt-protocol/src/messages.rs` | IPC request contract (25 variants, PROTOCOL_VERSION = 3) |
-| `ServerEvent` | enum | `orbt-protocol/src/messages.rs` | IPC event contract (15 variants) |
+| `ClientMessage` | enum | `orbt-protocol/src/messages.rs` | IPC request contract (25 variants, PROTOCOL_VERSION = 4) |
+| `ServerEvent` | enum | `orbt-protocol/src/messages.rs` | IPC event contract (16 variants) |
 | `Cell` | struct | `orbt-protocol/src/types.rs` | 16 bytes -- DO NOT grow |
 | `App` | struct | `orbt/src/app.rs` | TUI state: tabs, spaces, agents, modals, selection, scroll |
 | `SessionState` | struct | `orbt/src/daemon/session.rs` | Server session + tabs + agent wiring |
@@ -84,6 +85,7 @@ orbit/
 - **Agent panel keys**: `j`/`k` scroll, `r` restart Error agent, `s` stop, `d` dismiss, `Esc`/`q` exit
 - **Animation**: Lerp-based pulse (Working=slow, Blocked=fast amber, Error=red blink)
 - **Agent sort**: Blocked-first, then Working, then others; stable on updates
+- **Agent Fleet default**: Hidden behind `agent_fleet_enabled` config flag (default off in v0.1.11+); enable in settings.toml or via Ctrl+B a
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -108,6 +110,7 @@ orbit/
 - **Mobile/narrow TUI**: Auto-switches to 4-tab compact layout below 80 columns or 25 rows (TERMINAL / SPACES / COMMAND / AGENTS)
 - **Payload/image paste**: `Ctrl+B I` pastes clipboard images; `UploadPayload` IPC sends them to the remote daemon
 - **OpenCode agent detection**: Detects OpenCode alongside Claude/Codex/Aider/GH-Copilot/Cursor and script runners
+- **Agent Detail Modal**: Per-agent overlay showing ACP tool calls, files touched, token usage; opened via [Detail] button on agent cards
 
 ## COMMANDS
 
@@ -131,12 +134,13 @@ just qa                          # fmt-check + clippy + test
 - Both sides run VT parsers (accepted 2x CPU tradeoff)
 - `Cell` must stay 16 bytes -- grid clone ~160KB
 - Socket path: `$XDG_RUNTIME_DIR/orbt.sock` -- `$TMPDIR/orbt-<uid>.sock`
-- Protocol: length-prefixed bincode (4MB max); current version is PROTOCOL_VERSION = 3
+- Protocol: length-prefixed bincode (4MB max); current version is PROTOCOL_VERSION = 4 (bumped from 3 in v0.1.11 — breaking: added AgentAcpUpdated event + AcpDetail types)
 - Async lock rule: scope write guards tight; release before any `await` that reads same state
 - Agent detection: `AgentRegistry::watch_pane()` scans last 256 bytes of PTY output for block patterns
 - Agent names matched: `claude`, `codex`, `aider`, `gh-copilot`, `cursor`, `opencode` (+ script runners `node`/`npx`/`python`)
+- **ACP protocol detection**: agents exposing ACP (Agent Client Protocol) get [ACP] badge + detail modal with tool-call tracking
 - PTY output is ANSI-stripped before display in agent fields (`strip_ansi`)
-- `events.rs` is the largest file (2793 lines) -- all key/mouse dispatch lives here
+- `events.rs` is the largest file (3274 lines) -- all key/mouse dispatch lives here
 - Settings persisted to `~/.config/orbt/settings.toml`
 
 ## RELEASE MANAGEMENT
@@ -145,4 +149,4 @@ All release planning, channel status, version history, and release todos are mai
 
 **`/home/linus/dev/00_orbit/03_release/RELEASE_STATUS.md`** -- single canonical source for release work.
 
-Current public release is **v0.1.9** (2026-07-18). Channels: GitHub Releases, install.sh, crates.io (`orbt`/`orbt-protocol`/`orbt-core`), Homebrew tap, apt (apt.orbt.sh), AUR (`orbt-bin`/`orbt`/`orbit`), Scoop, winget (PR #404264 pending review), Nix flake. See RELEASE_STATUS.md for full channel details, pending issues, and version history. (will be promoted to v0.1.10 on tag push)
+Current public release is **v0.1.11** (2026-07-28). Channels: GitHub Releases, install.sh, crates.io (`orbt`/`orbt-protocol`/`orbt-core`), Homebrew tap, apt (apt.orbt.sh), AUR (`orbt-bin`/`orbt`/`orbit`), Scoop, winget (PR #404264 pending review), Nix flake. See RELEASE_STATUS.md for full channel details, pending issues, and version history.
