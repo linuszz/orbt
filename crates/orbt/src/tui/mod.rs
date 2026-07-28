@@ -62,6 +62,7 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 
 /// §6.7 responsive agent panel width.
 /// Only Sidebar mode occupies layout columns; Modal floats and returns 0.
+/// Returns 0 when the fleet feature is disabled.
 pub fn agent_panel_width(term_w: u16, mode: AgentPanelMode) -> u16 {
     if mode != AgentPanelMode::Sidebar || term_w < 80 {
         0
@@ -83,7 +84,12 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         SIDEBAR_COLLAPSED_W
     };
-    let agent_w = agent_panel_width(area.width, app.agent_panel_mode);
+    let effective_mode = if app.agent_fleet_enabled {
+        app.agent_panel_mode
+    } else {
+        AgentPanelMode::Hidden
+    };
+    let agent_w = agent_panel_width(area.width, effective_mode);
 
     let cols = ratatui::layout::Layout::horizontal([
         ratatui::layout::Constraint::Length(sidebar_w),
@@ -142,20 +148,22 @@ pub fn render(frame: &mut Frame, app: &App) {
     let border_y = rows[2].y + 1;
     widgets::status_bar::render(frame, status_inner, app);
 
-    match app.agent_panel_mode {
-        AgentPanelMode::Sidebar => {
-            let agent_area = Rect {
-                x: cols[2].x,
-                y: cols[2].y,
-                width: cols[2].width,
-                height: cols[2].height.saturating_sub(1),
-            };
-            widgets::agent_monitor::render(frame, agent_area, app);
+    if app.agent_fleet_enabled {
+        match app.agent_panel_mode {
+            AgentPanelMode::Sidebar => {
+                let agent_area = Rect {
+                    x: cols[2].x,
+                    y: cols[2].y,
+                    width: cols[2].width,
+                    height: cols[2].height.saturating_sub(1),
+                };
+                widgets::agent_monitor::render(frame, agent_area, app);
+            }
+            AgentPanelMode::Modal => {
+                widgets::agent_monitor::render_modal(frame, area, app);
+            }
+            AgentPanelMode::Hidden => {}
         }
-        AgentPanelMode::Modal => {
-            widgets::agent_monitor::render_modal(frame, area, app);
-        }
-        AgentPanelMode::Hidden => {}
     }
 
     let sep = "\u{2500}";
@@ -216,12 +224,13 @@ pub fn render(frame: &mut Frame, app: &App) {
         widgets::launch_modal::render(frame, area, app);
     }
 
-    if app.eclipse_modal.is_some() {
-        widgets::eclipse_modal::render(frame, area, app);
-    }
-
-    if app.agent_detail_modal.is_some() {
-        widgets::agent_detail_modal::render(frame, area, app);
+    if app.agent_fleet_enabled {
+        if app.eclipse_modal.is_some() {
+            widgets::eclipse_modal::render(frame, area, app);
+        }
+        if app.agent_detail_modal.is_some() {
+            widgets::agent_detail_modal::render(frame, area, app);
+        }
     }
 
     if app.settings_open {
@@ -267,12 +276,13 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             if matches!(app.mode, InputMode::CommandPalette { .. }) {
                 widgets::command_palette::render(frame, content_area, app);
             }
-            if app.eclipse_modal.is_some() {
-                widgets::eclipse_modal::render(frame, content_area, app);
-            }
-
-            if app.agent_detail_modal.is_some() {
-                widgets::agent_detail_modal::render(frame, content_area, app);
+            if app.agent_fleet_enabled {
+                if app.eclipse_modal.is_some() {
+                    widgets::eclipse_modal::render(frame, content_area, app);
+                }
+                if app.agent_detail_modal.is_some() {
+                    widgets::agent_detail_modal::render(frame, content_area, app);
+                }
             }
 
             if app.settings_open {
@@ -286,16 +296,18 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             }
         }
         MobileView::Agents => {
-            frame.render_widget(Clear, content_area);
-            widgets::agent_monitor::render(frame, content_area, app);
-            if app.eclipse_modal.is_some() {
-                widgets::eclipse_modal::render(frame, content_area, app);
-            }
-            if app.launch_modal.is_some() {
-                widgets::launch_modal::render(frame, content_area, app);
-            }
-            if app.agent_detail_modal.is_some() {
-                widgets::agent_detail_modal::render(frame, content_area, app);
+            if app.agent_fleet_enabled {
+                frame.render_widget(Clear, content_area);
+                widgets::agent_monitor::render(frame, content_area, app);
+                if app.eclipse_modal.is_some() {
+                    widgets::eclipse_modal::render(frame, content_area, app);
+                }
+                if app.launch_modal.is_some() {
+                    widgets::launch_modal::render(frame, content_area, app);
+                }
+                if app.agent_detail_modal.is_some() {
+                    widgets::agent_detail_modal::render(frame, content_area, app);
+                }
             }
         }
         MobileView::Windows => {
@@ -877,7 +889,8 @@ mod tests {
     #[test]
     fn render_basic_layout_120x30() {
         let state = minimal_state();
-        let app = App::from_welcome(&state, 120, 30);
+        let mut app = App::from_welcome(&state, 120, 30);
+        app.agent_fleet_enabled = true;
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
@@ -942,6 +955,7 @@ mod tests {
         });
         // 140 cols = Ultra mode: 25-col agent panel (iw=24), enough room for the full name.
         let mut app = App::from_welcome(&state, 140, 30);
+        app.agent_fleet_enabled = true;
         app.agent_panel_mode = AgentPanelMode::Sidebar;
         let backend = TestBackend::new(140, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -974,6 +988,7 @@ mod tests {
             protocol: orbt_protocol::AgentProtocol::Heuristic,
         });
         let mut app = App::from_welcome(&state, 120, 30);
+        app.agent_fleet_enabled = true;
         app.agent_panel_mode = AgentPanelMode::Sidebar;
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
@@ -1185,6 +1200,7 @@ mod tests {
     fn render_eclipse_modal_overlay() {
         let state = minimal_state();
         let mut app = App::from_welcome(&state, 120, 30);
+        app.agent_fleet_enabled = true;
         app.eclipse_modal = Some(crate::app::EclipseModalState {
             agent_id: orbt_protocol::AgentId(1),
             agent_name: "claude-dev".to_string(),

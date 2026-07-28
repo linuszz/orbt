@@ -210,7 +210,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             String::new()
         };
         let info1 = format!(" {}  {}  \u{00B7}  {}{}", icon, label, dur, tok_part);
-        render_row(frame, &info1, ix, row, iw, fg_secondary());
+        render_row(frame, &info1, ix, row, iw, fg_primary());
         row += 1;
     }
 
@@ -253,6 +253,16 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         }
         if row <= content_bottom {
             render_row(frame, &format!(" {}", task), ix, row, iw, fg_secondary());
+            row += 1;
+        }
+    } else {
+        // No task and no current operation — show a placeholder so the modal is not blank.
+        if row <= content_bottom {
+            render_section_header(frame, "Activity", ix, row, iw);
+            row += 1;
+        }
+        if row <= content_bottom {
+            render_row(frame, "  No activity data yet", ix, row, iw, fg_muted());
             row += 1;
         }
     }

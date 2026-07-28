@@ -16,36 +16,42 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         area,
     );
 
-    let fleet_badge: String = if !app.agent_panel_mode.is_visible() && !app.agents.is_empty() {
-        let n_blocked = app
-            .agents
-            .iter()
-            .filter(|a| a.status == AgentStatus::Blocked)
-            .count();
-        let n_working = app
-            .agents
-            .iter()
-            .filter(|a| a.status == AgentStatus::Working)
-            .count();
-        let n_error = app
-            .agents
-            .iter()
-            .filter(|a| a.status == AgentStatus::Error)
-            .count();
-        if n_blocked > 0 {
-            format!(" \u{25CE}{}", n_blocked)
-        } else if n_working > 0 {
-            format!(" \u{25CF}{}", n_working)
-        } else if n_error > 0 {
-            format!(" \u{25C9}{}", n_error)
+    let (fleet_badge, agent_label, agent_badge_w): (String, String, u16) =
+        if app.agent_fleet_enabled {
+            let badge = if !app.agent_panel_mode.is_visible() && !app.agents.is_empty() {
+                let n_blocked = app
+                    .agents
+                    .iter()
+                    .filter(|a| a.status == AgentStatus::Blocked)
+                    .count();
+                let n_working = app
+                    .agents
+                    .iter()
+                    .filter(|a| a.status == AgentStatus::Working)
+                    .count();
+                let n_error = app
+                    .agents
+                    .iter()
+                    .filter(|a| a.status == AgentStatus::Error)
+                    .count();
+                if n_blocked > 0 {
+                    format!(" \u{25CE}{}", n_blocked)
+                } else if n_working > 0 {
+                    format!(" \u{25CF}{}", n_working)
+                } else if n_error > 0 {
+                    format!(" \u{25C9}{}", n_error)
+                } else {
+                    format!(" \u{25CB}{}", app.agents.len())
+                }
+            } else {
+                String::new()
+            };
+            let label = format!(" [A] Agent Fleet{} ", badge);
+            let w = label.chars().count() as u16;
+            (badge, label, w)
         } else {
-            format!(" \u{25CB}{}", app.agents.len())
-        }
-    } else {
-        String::new()
-    };
-    let agent_label = format!(" [A] Agent Fleet{} ", fleet_badge);
-    let agent_badge_w: u16 = agent_label.chars().count() as u16;
+            (String::new(), String::new(), 0)
+        };
 
     let max_tabs_w = area.width.saturating_sub(3 + agent_badge_w + 1);
     let mut spans: Vec<Span> = Vec::new();
@@ -104,50 +110,52 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         Style::default().bg(bg_secondary()),
     ));
 
-    let (agent_fg, agent_bg) = if app.agent_panel_mode.is_visible() {
-        (bg_primary(), accent())
-    } else if app.tab_hovered == Some(app.tabs.len() + 1) {
-        (fg_primary(), accent_hover())
-    } else {
-        (fg_muted(), bg_card())
-    };
-    let badge_icon_color = if !app.agent_panel_mode.is_visible() {
-        let n_blocked = app
-            .agents
-            .iter()
-            .filter(|a| a.status == AgentStatus::Blocked)
-            .count();
-        let n_working = app
-            .agents
-            .iter()
-            .filter(|a| a.status == AgentStatus::Working)
-            .count();
-        if n_blocked > 0 {
-            Some(accent_blocked())
-        } else if n_working > 0 {
-            Some(accent())
+    if app.agent_fleet_enabled {
+        let (agent_fg, agent_bg) = if app.agent_panel_mode.is_visible() {
+            (bg_primary(), accent())
+        } else if app.tab_hovered == Some(app.tabs.len() + 1) {
+            (fg_primary(), accent_hover())
+        } else {
+            (fg_muted(), bg_card())
+        };
+        let badge_icon_color = if !app.agent_panel_mode.is_visible() {
+            let n_blocked = app
+                .agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Blocked)
+                .count();
+            let n_working = app
+                .agents
+                .iter()
+                .filter(|a| a.status == AgentStatus::Working)
+                .count();
+            if n_blocked > 0 {
+                Some(accent_blocked())
+            } else if n_working > 0 {
+                Some(accent())
+            } else {
+                None
+            }
         } else {
             None
+        };
+        if let Some(icon_color) = badge_icon_color {
+            let base = " [A] Agent Fleet";
+            let badge = format!("{} ", fleet_badge);
+            spans.push(Span::styled(
+                base,
+                Style::default().fg(agent_fg).bg(agent_bg),
+            ));
+            spans.push(Span::styled(
+                badge,
+                Style::default().fg(icon_color).bg(agent_bg),
+            ));
+        } else {
+            spans.push(Span::styled(
+                agent_label,
+                Style::default().fg(agent_fg).bg(agent_bg),
+            ));
         }
-    } else {
-        None
-    };
-    if let Some(icon_color) = badge_icon_color {
-        let base = " [A] Agent Fleet";
-        let badge = format!("{} ", fleet_badge);
-        spans.push(Span::styled(
-            base,
-            Style::default().fg(agent_fg).bg(agent_bg),
-        ));
-        spans.push(Span::styled(
-            badge,
-            Style::default().fg(icon_color).bg(agent_bg),
-        ));
-    } else {
-        spans.push(Span::styled(
-            agent_label,
-            Style::default().fg(agent_fg).bg(agent_bg),
-        ));
     }
 
     let line = Line::from(spans);

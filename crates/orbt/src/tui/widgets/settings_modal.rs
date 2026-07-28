@@ -17,9 +17,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     }
 
     let modal_w = 52u16.min(area.width.saturating_sub(4));
-    // Dynamic height: base 12 for 3 settings rows + 2 for satellites header + N agent rows.
-    let satellite_rows = app.agents.len().max(1) as u16;
-    let modal_h = (14 + satellite_rows).min(area.height.saturating_sub(4));
+    // Dynamic height: when fleet enabled, include satellites section; otherwise compact.
+    let modal_h = if app.agent_fleet_enabled {
+        let satellite_rows = app.agents.len().max(1) as u16;
+        (14 + satellite_rows).min(area.height.saturating_sub(4))
+    } else {
+        8u16.min(area.height.saturating_sub(4))
+    };
     let x = area.x + area.width.saturating_sub(modal_w) / 2;
     let y = area.y + area.height.saturating_sub(modal_h) / 2;
     let modal_area = Rect {
@@ -67,11 +71,13 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         AgentPanelMode::Hidden => "Off",
     };
 
-    let rows: Vec<(&str, String)> = vec![
+    let mut rows: Vec<(&str, String)> = vec![
         ("Theme", theme_display),
         ("Sidebar", sidebar_display.to_string()),
-        ("Agent Panel", agent_display.to_string()),
     ];
+    if app.agent_fleet_enabled {
+        rows.push(("Agent Panel", agent_display.to_string()));
+    }
 
     for (i, (label, value)) in rows.iter().enumerate() {
         let value = value.as_str();
@@ -113,7 +119,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         );
     }
 
-    // --- Agents section (read-only) ---
+    // --- Agents section (read-only, only when fleet enabled) ---
+    if !app.agent_fleet_enabled {
+        return;
+    }
     let sat_header_y = inner.y + 5;
     if sat_header_y < inner.y + inner.height.saturating_sub(2) {
         // "── Agents ──────" divider

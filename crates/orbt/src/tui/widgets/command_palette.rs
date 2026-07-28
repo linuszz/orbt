@@ -9,15 +9,22 @@ use ratatui::{
 use crate::app::{App, InputMode, COMMANDS};
 use crate::tui::theme::*;
 
-fn filter_indices(search: &str) -> Vec<usize> {
-    if search.is_empty() {
-        return (0..COMMANDS.len()).collect();
-    }
+const FLEET_COMMAND_IDS: &[&str] = &["toggle_agent", "agent_scroll_up", "agent_scroll_down"];
+
+fn filter_indices(search: &str, fleet_enabled: bool) -> Vec<usize> {
     let s = search.to_lowercase();
     COMMANDS
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.label.to_lowercase().contains(&s))
+        .filter(|(_, c)| {
+            if !fleet_enabled && FLEET_COMMAND_IDS.contains(&c.id) {
+                return false;
+            }
+            if search.is_empty() {
+                return true;
+            }
+            c.label.to_lowercase().contains(&s)
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -156,7 +163,7 @@ fn render_inner(frame: &mut Frame, area: Rect, dim_area: Rect, app: &App) {
             },
         );
 
-        let filtered = filter_indices(search);
+        let filtered = filter_indices(search, app.agent_fleet_enabled);
         let list_y = inner.y + 2;
         let list_h = inner.height.saturating_sub(3) as usize;
 

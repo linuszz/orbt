@@ -119,6 +119,7 @@ async fn main() -> Result<()> {
     let settings = load_settings();
     app.theme_name = settings.theme.clone();
     app.sidebar_visible = settings.sidebar_visible;
+    app.agent_fleet_enabled = settings.agent_fleet_enabled;
     app.agent_panel_mode = settings.agent_panel_mode;
     orbt_tui::tui::theme::set_theme(&app.theme_name);
 

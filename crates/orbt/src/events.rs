@@ -19,15 +19,22 @@ fn is_prefix_key(key: &KeyEvent) -> bool {
     key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('b')
 }
 
-fn filtered_indices(search: &str) -> Vec<usize> {
-    if search.is_empty() {
-        return (0..COMMANDS.len()).collect();
-    }
+const FLEET_CMD_IDS: &[&str] = &["toggle_agent", "agent_scroll_up", "agent_scroll_down"];
+
+fn filtered_indices(search: &str, fleet_enabled: bool) -> Vec<usize> {
     let s = search.to_lowercase();
     COMMANDS
         .iter()
         .enumerate()
-        .filter(|(_, c)| c.label.to_lowercase().contains(&s))
+        .filter(|(_, c)| {
+            if !fleet_enabled && FLEET_CMD_IDS.contains(&c.id) {
+                return false;
+            }
+            if search.is_empty() {
+                return true;
+            }
+            c.label.to_lowercase().contains(&s)
+        })
         .map(|(i, _)| i)
         .collect()
 }
@@ -158,20 +165,22 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
             orbt_tui::app::save_settings(app);
         }
         "toggle_agent" => {
-            app.agent_panel_mode = app.agent_panel_mode.cycle();
-            if app.agent_panel_mode.is_visible() {
-                let sel = if let InputMode::AgentPanel { selected } = app.mode {
-                    selected
+            if app.agent_fleet_enabled {
+                app.agent_panel_mode = app.agent_panel_mode.cycle();
+                if app.agent_panel_mode.is_visible() {
+                    let sel = if let InputMode::AgentPanel { selected } = app.mode {
+                        selected
+                    } else {
+                        0
+                    };
+                    app.mode = InputMode::AgentPanel { selected: sel };
+                    app.agent_scroll_offset = app.agent_scroll_offset.min(sel);
                 } else {
-                    0
-                };
-                app.mode = InputMode::AgentPanel { selected: sel };
-                app.agent_scroll_offset = app.agent_scroll_offset.min(sel);
-            } else {
-                app.mode = InputMode::Normal;
-                app.agent_hovered = None;
+                    app.mode = InputMode::Normal;
+                    app.agent_hovered = None;
+                }
+                orbt_tui::app::save_settings(app);
             }
-            orbt_tui::app::save_settings(app);
         }
         "agent_scroll_up" => {
             if app.agent_panel_mode.is_visible() {
@@ -536,8 +545,9 @@ async fn handle_mobile_close_confirm_key(key: KeyEvent, app: &mut App, writer: &
 
 /// Mobile-mode key handler. Returns true if the key was consumed.
 async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _term_h: u16) -> bool {
-    // Modals still capture input in mobile mode.
-    if app.launch_modal.is_some() || app.eclipse_modal.is_some() {
+    // Modals still capture input in mobile mode — delegate to handle_key.
+    if app.launch_modal.is_some() || app.eclipse_modal.is_some() || app.agent_detail_modal.is_some()
+    {
         return false;
     }
 
@@ -547,10 +557,12 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
         return true;
     }
 
-    // Tab cycles through mobile views.
+    // Tab cycles through mobile views (skip Agents when fleet disabled).
     if key.code == KeyCode::Tab {
         app.mobile_view = app.mobile_view.next();
-        // Entering Actions view: open command palette.
+        if !app.agent_fleet_enabled && app.mobile_view == MobileView::Agents {
+            app.mobile_view = app.mobile_view.next();
+        }
         if app.mobile_view == MobileView::Actions {
             app.mode = InputMode::CommandPalette {
                 search: String::new(),
@@ -781,7 +793,11 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
     }
 
     if app.settings_open {
-        let num_settings = 3usize;
+        let num_settings = if app.agent_fleet_enabled {
+            3usize
+        } else {
+            2usize
+        };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.settings_open = false;
@@ -806,7 +822,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                     app.needs_resize = true;
                     orbt_tui::app::save_settings(app);
                 }
-                2 => {
+                2 if app.agent_fleet_enabled => {
                     app.agent_panel_mode = app.agent_panel_mode.cycle();
                     orbt_tui::app::save_settings(app);
                 }
@@ -909,7 +925,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                 }
             }
 
-            let filtered = filtered_indices(search);
+            let filtered = filtered_indices(search, app.agent_fleet_enabled);
 
             match key.code {
                 KeyCode::Up => {
@@ -1695,17 +1711,29 @@ async fn handle_mobile_mouse(
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => {
             if mouse.row == nav_row && term_w >= 8 {
-                // Bottom nav bar click: determine which of the 4 tabs was clicked.
-                let tab_w = term_w / 4;
-                let col = mouse.column;
-                let view = if col < tab_w {
-                    MobileView::Terminal
-                } else if col < tab_w * 2 {
-                    MobileView::Windows
-                } else if col < tab_w * 3 {
-                    MobileView::Actions
+                // Bottom nav bar click: 4 tabs when fleet enabled, 3 when disabled.
+                let view = if app.agent_fleet_enabled {
+                    let tab_w = term_w / 4;
+                    let col = mouse.column;
+                    if col < tab_w {
+                        MobileView::Terminal
+                    } else if col < tab_w * 2 {
+                        MobileView::Windows
+                    } else if col < tab_w * 3 {
+                        MobileView::Actions
+                    } else {
+                        MobileView::Agents
+                    }
                 } else {
-                    MobileView::Agents
+                    let tab_w = term_w / 3;
+                    let col = mouse.column;
+                    if col < tab_w {
+                        MobileView::Terminal
+                    } else if col < tab_w * 2 {
+                        MobileView::Windows
+                    } else {
+                        MobileView::Actions
+                    }
                 };
                 app.mobile_view = view;
                 if view == MobileView::Actions {
@@ -1814,11 +1842,10 @@ async fn handle_mobile_mouse(
                             .collect();
                         let mut card_y = cards_base;
                         for (agent_id, agent_pane, agent_status, agent_protocol) in visible {
-                            let btn_row = card_y + slot_h.saturating_sub(1);
-                            let is_acp = !matches!(
-                                agent_protocol,
-                                orbt_protocol::AgentProtocol::Heuristic
-                            );
+                            // Wide cards (iw>=30): buttons at slot+4; narrow (iw<30): slot+5.
+                            let btn_row = card_y + if iw >= 30 { 4 } else { 5 };
+                            let is_acp =
+                                !matches!(agent_protocol, orbt_protocol::AgentProtocol::Heuristic);
 
                             // Button row: detect which slot was clicked.
                             // Button layout: │[View] [SlotA] [SlotB]
@@ -1852,9 +1879,8 @@ async fn handle_mobile_mouse(
                                                 let tab_id = found
                                                     .map(|(_, t)| t.id)
                                                     .unwrap_or(app.active_tab_id);
-                                                let tab_idx = found
-                                                    .map(|(i, _)| i)
-                                                    .unwrap_or(app.active_tab);
+                                                let tab_idx =
+                                                    found.map(|(i, _)| i).unwrap_or(app.active_tab);
                                                 app.active_pane = pane_id;
                                                 app.active_tab = tab_idx;
                                                 app.active_tab_id = tab_id;
@@ -1889,13 +1915,11 @@ async fn handle_mobile_mouse(
                                             _ => {
                                                 // [Chat] — focus pane.
                                                 if let Some(pane_id) = agent_pane {
-                                                    let found = app
-                                                        .tabs
-                                                        .iter()
-                                                        .enumerate()
-                                                        .find(|(_, t)| {
+                                                    let found = app.tabs.iter().enumerate().find(
+                                                        |(_, t)| {
                                                             t.pane_tree.leaves().contains(&pane_id)
-                                                        });
+                                                        },
+                                                    );
                                                     let tab_id = found
                                                         .map(|(_, t)| t.id)
                                                         .unwrap_or(app.active_tab_id);
@@ -2095,11 +2119,12 @@ async fn handle_mobile_mouse(
                             && mouse.row < list_start_y + list_h as u16
                         {
                             let clicked_row = (mouse.row - list_start_y) as usize;
+                            let fleet_enabled = app.agent_fleet_enabled;
                             if let InputMode::CommandPalette {
                                 search, selected, ..
                             } = &mut app.mode
                             {
-                                let filtered = filtered_indices(search);
+                                let filtered = filtered_indices(search, fleet_enabled);
                                 // Build row offsets accounting for group headers
                                 // (group headers only appear when search is empty)
                                 let mut row = 0usize;
@@ -2174,11 +2199,12 @@ async fn handle_mobile_mouse(
                 }
                 app.needs_redraw = true;
             } else if app.mobile_view == MobileView::Actions {
+                let fleet_enabled = app.agent_fleet_enabled;
                 if let InputMode::CommandPalette {
                     search, selected, ..
                 } = &mut app.mode
                 {
-                    let max = filtered_indices(search).len();
+                    let max = filtered_indices(search, fleet_enabled).len();
                     if max > 0 {
                         *selected = (*selected + 1).min(max - 1);
                     }

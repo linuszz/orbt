@@ -103,6 +103,11 @@ pub struct UserSettings {
     /// Legacy field — migrated to agent_panel_mode on load.
     #[serde(default, skip_serializing)]
     pub agent_panel_visible: bool,
+    /// Hidden opt-in switch. Set to `true` in settings.toml to enable the
+    /// Agent Fleet panel, mobile Agents tab, and all related UI. Defaults to
+    /// false — the feature is not shown until explicitly opted in.
+    #[serde(default)]
+    pub agent_fleet_enabled: bool,
 }
 
 impl Default for UserSettings {
@@ -112,6 +117,7 @@ impl Default for UserSettings {
             sidebar_visible: true,
             agent_panel_mode: AgentPanelMode::Hidden,
             agent_panel_visible: false,
+            agent_fleet_enabled: false,
         }
     }
 }
@@ -143,6 +149,7 @@ pub fn save_settings(app: &App) {
         sidebar_visible: app.sidebar_visible,
         agent_panel_mode: app.agent_panel_mode,
         agent_panel_visible: false,
+        agent_fleet_enabled: app.agent_fleet_enabled,
     };
     let path = settings_path();
     if let Some(parent) = path.parent() {
@@ -503,6 +510,8 @@ pub struct App {
     pub drag_tab: Option<usize>,
     pub drag_split: Option<(PaneId, PaneId, SplitDir, f32)>,
     pub theme_name: String,
+    /// Runtime copy of `UserSettings::agent_fleet_enabled`. Set at startup, fixed for the session.
+    pub agent_fleet_enabled: bool,
     pub settings_open: bool,
     pub settings_selected: usize,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
@@ -689,6 +698,7 @@ impl App {
             drag_tab: None,
             drag_split: None,
             theme_name: "orbt".to_string(),
+            agent_fleet_enabled: false,
             settings_open: false,
             settings_selected: 0,
             pending_payload_path: None,
@@ -1119,7 +1129,7 @@ impl App {
                 self.agents.push(info.clone());
                 self.sort_agents();
                 // Auto-open in Sidebar mode when a new agent is detected, unless already Modal.
-                if self.agent_panel_mode == AgentPanelMode::Hidden {
+                if self.agent_fleet_enabled && self.agent_panel_mode == AgentPanelMode::Hidden {
                     self.agent_panel_mode = AgentPanelMode::Sidebar;
                 }
                 self.needs_redraw = true;
@@ -1461,6 +1471,7 @@ pub mod tests {
     fn handle_agent_created_event() {
         let state = minimal_state();
         let mut app = App::from_welcome(&state, 80, 24);
+        app.agent_fleet_enabled = true;
         assert!(app.agents.is_empty());
 
         let info = make_agent(10, AgentStatus::Working);
@@ -1609,6 +1620,7 @@ pub mod tests {
             sidebar_visible: false,
             agent_panel_mode: AgentPanelMode::Modal,
             agent_panel_visible: false,
+            agent_fleet_enabled: false,
         };
         let toml_str = toml::to_string(&settings).unwrap();
         let restored: UserSettings = toml::from_str(&toml_str).unwrap();
