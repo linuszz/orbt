@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
 
@@ -119,6 +119,9 @@ pub struct SessionState {
     pub shell: String,
     pub cwd: String,
     pub agent_registry: Arc<AgentRegistry>,
+    /// Circular scrollback buffer per pane: last 500 non-empty lines of stripped PTY output.
+    /// Populated by `spawn_scrollback_collector`; consumed by `to_snapshot` at shutdown.
+    pub pane_scrollback: Arc<RwLock<HashMap<PaneId, VecDeque<String>>>>,
 }
 
 impl SessionState {
@@ -175,6 +178,7 @@ impl SessionState {
             shell,
             cwd,
             agent_registry,
+            pane_scrollback: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -237,6 +241,7 @@ impl SessionState {
             shell,
             cwd,
             agent_registry,
+            pane_scrollback: Arc::new(RwLock::new(HashMap::new())),
         })
     }
 
@@ -566,6 +571,100 @@ impl SessionState {
         (80, 24)
     }
 
+    /// Spawn a background task that subscribes to the event bus and accumulates
+    /// stripped PTY output into `pane_scrollback` (capped at 500 lines per pane).
+    pub fn spawn_scrollback_collector(self: Arc<Self>) {
+        let scrollback = Arc::clone(&self.pane_scrollback);
+        let mut rx = self.event_bus.subscribe();
+        tokio::spawn(async move {
+            loop {
+                match rx.recv().await {
+                    Ok(ServerEvent::PaneOutput { pane_id, data }) => {
+                        let text = std::str::from_utf8(&data).unwrap_or("");
+                        let stripped = super::agent::strip_ansi(text);
+                        let mut sb = scrollback.write().await;
+                        let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
+                        for line in stripped.lines() {
+                            let trimmed = line.trim();
+                            if !trimmed.is_empty() {
+                                buf.push_back(trimmed.to_string());
+                                if buf.len() > 500 {
+                                    buf.pop_front();
+                                }
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    /// Serialize this session into a `SpaceSnapshot` for on-disk persistence.
+    pub async fn to_snapshot(&self) -> crate::daemon::snapshot::SpaceSnapshot {
+        let tab_order = self.tab_order.read().await;
+        let tabs = self.tabs.read().await;
+        let panes = self.panes.read().await;
+        let scrollback = self.pane_scrollback.read().await;
+        let active_tab = *self.active_tab.read().await;
+
+        let mut tab_snaps = Vec::new();
+        for tab_id in tab_order.iter() {
+            if let Some(tab) = tabs.get(tab_id) {
+                let leaf_ids = tab.layout.leaves();
+                let mut pane_snaps = Vec::new();
+                for pane_id in &leaf_ids {
+                    let cwd = if let Some(entry) = panes.get(pane_id) {
+                        let child_pid = entry.child.lock().ok().and_then(|c| c.process_id());
+                        child_pid
+                            .map(|p| proc_cwd(p, &self.cwd))
+                            .unwrap_or_else(|| self.cwd.clone())
+                    } else {
+                        self.cwd.clone()
+                    };
+                    let lines = scrollback
+                        .get(pane_id)
+                        .map(|d| d.iter().cloned().collect::<Vec<_>>())
+                        .unwrap_or_default();
+                    pane_snaps.push(crate::daemon::snapshot::PaneSnapshot {
+                        id: pane_id.0,
+                        cwd,
+                        scrollback: lines,
+                    });
+                }
+                tab_snaps.push(crate::daemon::snapshot::TabSnapshot {
+                    id: tab_id.0,
+                    name: tab.name.clone(),
+                    active_pane_id: tab.active_pane.0,
+                    panes: pane_snaps,
+                });
+            }
+        }
+
+        // Collect agents belonging to this space from the shared registry.
+        let all_agents = self.agent_registry.get_agents().await;
+        let agents: Vec<_> = all_agents
+            .into_iter()
+            .filter(|a| a.space_id == self.space_id)
+            .map(|a| crate::daemon::snapshot::AgentSnapshot {
+                name: a.name,
+                launch_cmd: a.launch_cmd,
+                cwd: self.cwd.clone(),
+            })
+            .collect();
+
+        crate::daemon::snapshot::SpaceSnapshot {
+            id: self.space_id.0,
+            name: self.space_name.clone(),
+            cwd: self.cwd.clone(),
+            active_tab_id: active_tab.0,
+            tabs: tab_snaps,
+            agents,
+        }
+    }
+
     pub async fn collect_space_info(&self) -> SpaceInfo {
         let tabs = self.tabs.read().await;
         let tab_order = self.tab_order.read().await;
@@ -688,6 +787,7 @@ impl SpaceManager {
             )
             .await?,
         );
+        Arc::clone(&session).spawn_scrollback_collector();
 
         let mut spaces = HashMap::new();
         spaces.insert(space_id, session);
@@ -745,6 +845,7 @@ impl SpaceManager {
             )
             .await?,
         );
+        Arc::clone(&session).spawn_scrollback_collector();
 
         {
             let mut spaces = self.spaces.write().await;
@@ -851,6 +952,35 @@ impl SpaceManager {
         let spaces = self.spaces.read().await;
         for session in spaces.values() {
             session.nudge_all_panes().await;
+        }
+    }
+
+    /// Serialize all spaces to `~/.orbt/sessions/session.toml`.
+    /// Drops the spaces/order read locks before doing async snapshot work to avoid
+    /// holding them across the awaits inside `to_snapshot` (see CLAUDE.md §9.9).
+    pub async fn save_snapshot(&self) {
+        // Collect Arc references first, then release the read locks.
+        let sessions: Vec<Arc<SessionState>> = {
+            let order = self.space_order.read().await;
+            let spaces = self.spaces.read().await;
+            order
+                .iter()
+                .filter_map(|id| spaces.get(id).cloned())
+                .collect()
+        };
+        let active_space_id = self.active_space.read().await.0;
+
+        let mut space_snaps = Vec::new();
+        for sess in &sessions {
+            space_snaps.push(sess.to_snapshot().await);
+        }
+
+        let snap = crate::daemon::snapshot::SessionSnapshot {
+            spaces: space_snaps,
+            active_space_id,
+        };
+        if let Err(e) = crate::daemon::snapshot::save(&snap) {
+            tracing::warn!("failed to save session snapshot: {e:#}");
         }
     }
 

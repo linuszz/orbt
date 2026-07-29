@@ -732,7 +732,7 @@ fn process_exists(pid: u32) -> bool {
 
 /// Strip ANSI/VT escape sequences (CSI, OSC, ESC+single-char) from `text`.
 /// Used to clean up PTY output before storing it as block_msg or in the output history ring.
-fn strip_ansi(text: &str) -> String {
+pub(crate) fn strip_ansi(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

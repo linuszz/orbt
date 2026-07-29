@@ -3,6 +3,7 @@ pub mod io;
 pub mod ipc;
 pub mod pty;
 pub mod session;
+pub mod snapshot;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -101,7 +102,7 @@ pub async fn run() -> Result<()> {
         }
         _ = wait_for_signal() => {
             info!("stopping orbtd");
-            // Task 4 hook: space_manager.save_snapshot().await;
+            space_manager.save_snapshot().await;
             space_manager.shutdown_all().await;
         }
     }
