@@ -148,6 +148,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(unix)]
     fn lock_file_no_race_on_fresh_path() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("test.lock");
@@ -155,5 +156,15 @@ mod tests {
         // Second acquire on same path while this process is alive must fail.
         let result = acquire_lock(&path);
         assert!(result.is_err(), "second acquire should fail with live PID");
+    }
+
+    #[test]
+    #[cfg(not(unix))]
+    fn lock_file_stale_overwritten_on_non_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        acquire_lock(&path).expect("first acquire should succeed");
+        // On non-unix, stale lock is always overwritten.
+        acquire_lock(&path).expect("stale lock is overwritten on non-unix");
     }
 }
