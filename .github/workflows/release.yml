@@ -223,6 +223,7 @@ jobs:
           git push
 
       - name: Submit winget PR
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
         run: |
