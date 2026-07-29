@@ -952,6 +952,7 @@ mod tests {
                 acp: None,
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
+            launch_cmd: None,
         });
         // 140 cols = Ultra mode: 25-col agent panel (iw=24), enough room for the full name.
         let mut app = App::from_welcome(&state, 140, 30);
@@ -986,6 +987,7 @@ mod tests {
                 acp: None,
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
+            launch_cmd: None,
         });
         let mut app = App::from_welcome(&state, 120, 30);
         app.agent_fleet_enabled = true;

@@ -1235,6 +1235,7 @@ pub mod tests {
                 acp: None,
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
+            launch_cmd: None,
         });
         App::from_welcome(&state, w, h)
     }
@@ -1282,6 +1283,7 @@ pub mod tests {
                 acp: None,
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
+            launch_cmd: None,
         }
     }
 

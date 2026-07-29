@@ -361,6 +361,9 @@ pub struct AgentInfo {
     /// Detection/connection protocol. Defaults to Heuristic for backward compatibility.
     #[serde(default)]
     pub protocol: AgentProtocol,
+    /// Command that launched this agent (if via AgentLaunch); used for restart re-exec.
+    #[serde(default)]
+    pub launch_cmd: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

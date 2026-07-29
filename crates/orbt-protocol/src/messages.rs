@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 4; // was 3; AgentDetail gained `acp` field
+pub const PROTOCOL_VERSION: u32 = 5; // was 4; AgentInfo gains `launch_cmd` field
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{bail, Result};
 use arboard::Clipboard;
@@ -163,7 +163,29 @@ where
                         space_manager.agent_registry.abort_agent(agent_id).await;
                     }
                     ClientMessage::AgentRestart { agent_id } => {
-                        space_manager.agent_registry.restart_agent(agent_id).await;
+                        let registry = Arc::clone(&space_manager.agent_registry);
+                        let sm = Arc::clone(&space_manager);
+                        tokio::spawn(async move {
+                            // SIGTERM the existing process.
+                            registry.abort_agent(agent_id).await;
+                            // Brief pause to allow the process to exit before resetting state.
+                            tokio::time::sleep(Duration::from_millis(200)).await;
+                            // Reset agent status to Idle.
+                            registry.restart_agent(agent_id).await;
+                            // Re-launch if a launch command was recorded for this agent.
+                            let Some(info) = registry.get_agent_info(agent_id).await else {
+                                return;
+                            };
+                            if let (Some(cmd), Some(pane_id)) = (info.launch_cmd, info.pane_id) {
+                                let Some(sess) = sm.get_session_for_pane(pane_id).await else {
+                                    return;
+                                };
+                                tokio::time::sleep(Duration::from_millis(500)).await;
+                                let bytes = format!("{}\r", cmd.trim()).into_bytes();
+                                sess.send_input(orbt_protocol::TabId(u32::MAX), pane_id, bytes)
+                                    .await;
+                            }
+                        });
                     }
                     ClientMessage::AgentRemove { agent_id } => {
                         space_manager.agent_registry.remove_agent(agent_id).await;
@@ -194,9 +216,14 @@ where
                         let active_tab_id = *session.active_tab.read().await;
                         match session.split_pane(active_tab_id, orbt_protocol::SplitDir::Horizontal).await {
                             Ok(new_pane_id) => {
+                                // Record the launch command so AgentRestart can re-execute it.
+                                space_manager
+                                    .agent_registry
+                                    .set_pending_launch_cmd(new_pane_id, config.name.clone())
+                                    .await;
                                 let cmd = format!("{}\r", config.name.trim());
                                 tokio::spawn(async move {
-                                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                                    tokio::time::sleep(Duration::from_millis(300)).await;
                                     session.send_input(active_tab_id, new_pane_id, cmd.into_bytes()).await;
                                 });
                             }

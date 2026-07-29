@@ -1,9 +1,9 @@
 //! Agent runtime: detection, state machine, registry.
 //! See `06_tech-design/04-server-architecture.md` §4 and `07-agent-data-model.md`.
 
-use std::collections::HashMap;
 #[cfg(target_os = "linux")]
 use std::collections::HashSet;
+use std::collections::{HashMap, VecDeque};
 #[cfg(target_os = "linux")]
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
@@ -93,6 +93,10 @@ pub struct AgentRegistry {
     agents: RwLock<Vec<AgentInfo>>,
     /// Maps AgentId → OS PID for abort support.
     pid_map: RwLock<HashMap<AgentId, u32>>,
+    /// Circular output buffer per agent; capped at 200 lines.
+    output_history: RwLock<HashMap<AgentId, VecDeque<String>>>,
+    /// Pending launch command per pane, stored before the agent process is detected.
+    pending_launch_cmds: RwLock<HashMap<PaneId, String>>,
     #[cfg(target_os = "linux")]
     next_id: AtomicU32,
     event_bus: broadcast::Sender<ServerEvent>,
@@ -103,6 +107,8 @@ impl AgentRegistry {
         Arc::new(Self {
             agents: RwLock::new(Vec::new()),
             pid_map: RwLock::new(HashMap::new()),
+            output_history: RwLock::new(HashMap::new()),
+            pending_launch_cmds: RwLock::new(HashMap::new()),
             #[cfg(target_os = "linux")]
             next_id: AtomicU32::new(0),
             event_bus,
@@ -151,6 +157,34 @@ impl AgentRegistry {
         }
     }
 
+    /// Return all stored output lines for `agent_id`, oldest-first.
+    /// Used by Task 3 (TUI detail modal); suppressed until that wiring lands.
+    #[allow(dead_code)]
+    pub async fn get_output_history(&self, agent_id: AgentId) -> Vec<String> {
+        self.output_history
+            .read()
+            .await
+            .get(&agent_id)
+            .map(|d| d.iter().cloned().collect())
+            .unwrap_or_default()
+    }
+
+    /// Register a pending launch command for `pane_id`.
+    /// The agent watcher picks this up when it first detects an agent in that pane.
+    pub async fn set_pending_launch_cmd(&self, pane_id: PaneId, cmd: String) {
+        self.pending_launch_cmds.write().await.insert(pane_id, cmd);
+    }
+
+    /// Return the stored `AgentInfo` for `agent_id`, or `None` if not found.
+    pub async fn get_agent_info(&self, agent_id: AgentId) -> Option<AgentInfo> {
+        self.agents
+            .read()
+            .await
+            .iter()
+            .find(|a| a.id == agent_id)
+            .cloned()
+    }
+
     /// Start a background task that polls for agent child processes of `shell_pid`
     /// and scans PTY output for block patterns (Satellite Eclipse detection).
     /// On non-Linux, process detection is skipped (no /proc); block scanning still runs.
@@ -165,10 +199,6 @@ impl AgentRegistry {
             let mut tracked: HashMap<u32, (AgentId, Instant)> = HashMap::new();
             #[cfg(not(target_os = "linux"))]
             let tracked: HashMap<u32, (AgentId, Instant)> = HashMap::new();
-
-            // Last meaningful output line seen (shown in card row 2); Linux only.
-            #[cfg(target_os = "linux")]
-            let mut last_output_line = String::new();
 
             // Last progress percentage detected; Linux only.
             #[cfg(target_os = "linux")]
@@ -199,14 +229,26 @@ impl AgentRegistry {
                                 let tail_start = data.len().saturating_sub(256);
                                 let tail = String::from_utf8_lossy(&data[tail_start..]);
 
-                                // Update last meaningful output line (Linux only).
+                                // Push the last meaningful output line to the ring buffer
+                                // for all currently-tracked agents (Linux only).
                                 #[cfg(target_os = "linux")]
                                 if let Some(line) = tail
                                     .lines()
                                     .map(|l| l.trim())
                                     .rfind(|l| !l.is_empty() && l.len() > 3)
                                 {
-                                    last_output_line = strip_ansi(line);
+                                    let stripped = strip_ansi(line);
+                                    if !tracked.is_empty() {
+                                        let mut hist = self.output_history.write().await;
+                                        for (aid, _) in tracked.values() {
+                                            let buf =
+                                                hist.entry(*aid).or_insert_with(VecDeque::new);
+                                            buf.push_back(stripped.clone());
+                                            if buf.len() > 200 {
+                                                buf.pop_front();
+                                            }
+                                        }
+                                    }
                                 }
 
                                 // Block-pattern scan only meaningful when agents are tracked.
@@ -334,6 +376,9 @@ impl AgentRegistry {
                                     } else {
                                         AgentProtocol::Heuristic
                                     };
+                                    // Pull any pending launch command registered for this pane.
+                                    let launch_cmd =
+                                        self.pending_launch_cmds.write().await.remove(&pane_id);
                                     let info = AgentInfo {
                                         id,
                                         name,
@@ -346,6 +391,7 @@ impl AgentRegistry {
                                             ..Default::default()
                                         }),
                                         protocol,
+                                        launch_cmd,
                                     };
                                     tracked.insert(*cpid, (id, Instant::now()));
                                     self.agents.write().await.push(info.clone());
@@ -437,10 +483,15 @@ impl AgentRegistry {
                                         None
                                     };
                                     cpu_prev.insert(*cpid, current_ticks);
-                                    let recent = if last_output_line.is_empty() {
-                                        vec![]
-                                    } else {
-                                        vec![last_output_line.clone()]
+                                    // Read the last 20 lines from the ring buffer (oldest-first).
+                                    let recent_lines = {
+                                        let hist = self.output_history.read().await;
+                                        let mut v: Vec<String> = hist
+                                            .get(agent_id)
+                                            .map(|d| d.iter().rev().take(20).cloned().collect())
+                                            .unwrap_or_default();
+                                        v.reverse();
+                                        v
                                     };
                                     let _ =
                                         self.event_bus.send(ServerEvent::AgentMetricsUpdated {
@@ -448,7 +499,7 @@ impl AgentRegistry {
                                             metrics: AgentMetrics {
                                                 cpu_percent,
                                                 rss_kb,
-                                                recent_lines: recent,
+                                                recent_lines,
                                             },
                                         });
                                 }
@@ -678,7 +729,7 @@ fn process_exists(pid: u32) -> bool {
 }
 
 /// Strip ANSI/VT escape sequences (CSI, OSC, ESC+single-char) from `text`.
-/// Used to clean up PTY output before storing it as block_msg or last_output_line.
+/// Used to clean up PTY output before storing it as block_msg or in the output history ring.
 fn strip_ansi(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
@@ -758,6 +809,26 @@ fn extract_progress(text: &str) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn agent_output_history_cap() {
+        let (tx, _rx) = tokio::sync::broadcast::channel(1);
+        let registry = AgentRegistry::new(tx);
+        let agent_id = AgentId(1);
+        {
+            let mut hist = registry.output_history.write().await;
+            let buf = hist.entry(agent_id).or_insert_with(VecDeque::new);
+            for i in 0..300u32 {
+                buf.push_back(format!("line {i}"));
+            }
+            while buf.len() > 200 {
+                buf.pop_front();
+            }
+        }
+        let history = registry.get_output_history(agent_id).await;
+        assert_eq!(history.len(), 200);
+        assert_eq!(history[0], "line 100");
+    }
 
     #[cfg(target_os = "linux")]
     #[test]

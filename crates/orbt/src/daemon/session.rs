@@ -833,6 +833,20 @@ impl SpaceManager {
         Ok(())
     }
 
+    /// Find the session that owns `pane_id`, searching all spaces.
+    pub async fn get_session_for_pane(&self, pane_id: PaneId) -> Option<Arc<SessionState>> {
+        let sessions: Vec<Arc<SessionState>> = {
+            let spaces = self.spaces.read().await;
+            spaces.values().cloned().collect()
+        };
+        for session in sessions {
+            if session.panes.read().await.contains_key(&pane_id) {
+                return Some(session);
+            }
+        }
+        None
+    }
+
     pub async fn nudge_all_spaces(&self) {
         let spaces = self.spaces.read().await;
         for session in spaces.values() {
