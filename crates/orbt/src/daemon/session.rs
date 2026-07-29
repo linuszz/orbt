@@ -729,16 +729,41 @@ impl SessionState {
                     Arc::clone(&agent_registry).watch_pane(pane_id, space_id, pid);
                 }
 
-                // Pre-populate the in-memory scrollback ring buffer so history
-                // survives into the next save_snapshot cycle. Do NOT replay these
-                // stripped text lines through the VT parser — the parser expects raw
-                // terminal sequences and would produce garbled cell content from
-                // plain text. The cell grid starts fresh from the newly-spawned shell.
-                if !pane_snap.scrollback.is_empty() {
+                // Apply the same filter as the scrollback collector so old snapshots
+                // that contain XTGETTCAP hex payloads or keystroke echoes are cleaned
+                // up before being replayed.
+                let clean_lines: Vec<&str> = pane_snap
+                    .scrollback
+                    .iter()
+                    .map(|l| l.trim())
+                    .filter(|l| {
+                        !l.is_empty()
+                            && !l.starts_with("+q")
+                            && !l.chars().all(|c| c.is_ascii_control())
+                    })
+                    .collect();
+
+                if !clean_lines.is_empty() {
+                    // Build the history text and replay it through the server-side VT
+                    // parser. These are all sync operations (no await), so the spawned
+                    // PTY output task has not had a chance to run yet — no interleave risk.
+                    let history_text = clean_lines.join("\r\n") + "\r\n";
+                    if let Ok(mut parser) = handles.parser.lock() {
+                        parser.process(history_text.as_bytes());
+                    }
+                    // Broadcast so any already-connected client can also update its
+                    // local VT parser. (No subscribers at daemon startup → ignored.)
+                    let _ = event_bus.send(ServerEvent::PaneOutput {
+                        pane_id,
+                        data: history_text.into_bytes(),
+                    });
+
+                    // Pre-populate the ring buffer for the next snapshot cycle.
+                    // Must happen after the sync work above (this await yields).
                     let mut sb = pane_scrollback.write().await;
                     let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
-                    for line in &pane_snap.scrollback {
-                        buf.push_back(line.clone());
+                    for line in &clean_lines {
+                        buf.push_back(line.to_string());
                         if buf.len() > 500 {
                             buf.pop_front();
                         }
