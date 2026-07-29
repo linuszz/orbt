@@ -100,6 +100,21 @@ pub struct PaneEntry {
     pub child: SharedChild,
 }
 
+/// Build a PaneLayout tree from an ordered slice of pane IDs.
+/// Single pane → `Leaf`; multiple panes → right-nested horizontal splits with equal ratios.
+fn build_pane_layout(pane_ids: &[PaneId]) -> PaneLayout {
+    match pane_ids {
+        [] => PaneLayout::Leaf(PaneId(0)), // unreachable in practice
+        [single] => PaneLayout::Leaf(*single),
+        [first, rest @ ..] => PaneLayout::Split {
+            direction: SplitDir::Horizontal,
+            first: Box::new(PaneLayout::Leaf(*first)),
+            second: Box::new(build_pane_layout(rest)),
+            ratio: 1.0 / pane_ids.len() as f32,
+        },
+    }
+}
+
 pub struct TabState {
     pub name: String,
     pub layout: PaneLayout,
@@ -665,6 +680,148 @@ impl SessionState {
         }
     }
 
+    /// Reconstruct a `SessionState` from a saved `SpaceSnapshot`.
+    /// Spawns one PTY shell per pane at the saved `cwd`, pre-populates the scrollback buffer,
+    /// broadcasts saved scrollback as `PaneOutput` events so clients see history on reconnect,
+    /// and schedules a 1-second delayed re-launch for any saved agent commands.
+    pub async fn restore_from_snapshot(
+        snap: &crate::daemon::snapshot::SpaceSnapshot,
+        event_bus: broadcast::Sender<ServerEvent>,
+        agent_registry: Arc<AgentRegistry>,
+        next_pane_id: Arc<AtomicU32>,
+        next_tab_id: Arc<AtomicU32>,
+        shell: String,
+    ) -> anyhow::Result<Self> {
+        let space_id = SpaceId(snap.id);
+
+        let mut panes_map: HashMap<PaneId, PaneEntry> = HashMap::new();
+        let mut tabs_map: HashMap<TabId, TabState> = HashMap::new();
+        let mut tab_order: Vec<TabId> = Vec::new();
+        let pane_scrollback = Arc::new(RwLock::new(HashMap::<PaneId, VecDeque<String>>::new()));
+
+        for tab_snap in &snap.tabs {
+            let tab_id = TabId(tab_snap.id);
+            let mut pane_ids_in_tab: Vec<PaneId> = Vec::new();
+
+            for pane_snap in &tab_snap.panes {
+                let pane_id = PaneId(pane_snap.id);
+                pane_ids_in_tab.push(pane_id);
+
+                let handles =
+                    pty::spawn_pty(pane_id, &shell, &pane_snap.cwd, 80, 24, event_bus.clone())
+                        .await
+                        .with_context(|| {
+                            format!("restore: failed to spawn PTY for pane {}", pane_id.0)
+                        })?;
+
+                if let Some(pid) = handles.child_pid {
+                    Arc::clone(&agent_registry).watch_pane(pane_id, space_id, pid);
+                }
+
+                if !pane_snap.scrollback.is_empty() {
+                    let joined = pane_snap.scrollback.join("\r\n") + "\r\n";
+
+                    // Feed scrollback into the server-side cell grid so the first
+                    // SpaceInfo snapshot sent to a reconnecting client is meaningful.
+                    if let Ok(mut parser) = handles.parser.lock() {
+                        parser.process(joined.as_bytes());
+                    }
+
+                    // Pre-populate the in-memory scrollback buffer so the next
+                    // save_snapshot includes these lines again.
+                    {
+                        let mut sb = pane_scrollback.write().await;
+                        let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
+                        for line in &pane_snap.scrollback {
+                            buf.push_back(line.clone());
+                            if buf.len() > 500 {
+                                buf.pop_front();
+                            }
+                        }
+                    }
+
+                    // Broadcast so any already-connected client (or one that connects
+                    // immediately after restore) receives the scrollback history.
+                    let _ = event_bus.send(ServerEvent::PaneOutput {
+                        pane_id,
+                        data: joined.into_bytes(),
+                    });
+                }
+
+                panes_map.insert(
+                    pane_id,
+                    PaneEntry {
+                        input_tx: handles.input_tx,
+                        vt_parser: handles.parser,
+                        master: handles.master,
+                        child: handles.child,
+                    },
+                );
+            }
+
+            let active_pane = PaneId(tab_snap.active_pane_id);
+            let layout = build_pane_layout(&pane_ids_in_tab);
+            tabs_map.insert(
+                tab_id,
+                TabState {
+                    name: tab_snap.name.clone(),
+                    layout,
+                    active_pane,
+                },
+            );
+            tab_order.push(tab_id);
+        }
+
+        // Fall back to first tab if the saved active_tab_id is no longer present.
+        let active_tab = {
+            let saved = TabId(snap.active_tab_id);
+            if tab_order.contains(&saved) {
+                saved
+            } else {
+                tab_order.first().copied().unwrap_or(TabId(u32::MAX))
+            }
+        };
+
+        // Schedule agent command re-execution (1 s delay so the shell is ready).
+        for agent_snap in &snap.agents {
+            if let Some(ref cmd) = agent_snap.launch_cmd {
+                // Use the first pane of the active tab as the target.
+                let target_pane = tabs_map
+                    .get(&active_tab)
+                    .and_then(|t| t.layout.leaves().first().copied());
+                if let Some(pane_id) = target_pane {
+                    agent_registry
+                        .set_pending_launch_cmd(pane_id, cmd.clone())
+                        .await;
+                    if let Some(entry) = panes_map.get(&pane_id) {
+                        let input_tx = entry.input_tx.clone();
+                        let cmd_bytes = format!("{}\r", cmd.trim()).into_bytes();
+                        tokio::spawn(async move {
+                            tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+                            let _ = input_tx.send(cmd_bytes).await;
+                        });
+                    }
+                }
+            }
+        }
+
+        Ok(Self {
+            space_id,
+            space_name: snap.name.clone(),
+            panes: RwLock::new(panes_map),
+            tabs: RwLock::new(tabs_map),
+            tab_order: RwLock::new(tab_order),
+            active_tab: RwLock::new(active_tab),
+            next_pane_id,
+            next_tab_id,
+            event_bus,
+            shell,
+            cwd: snap.cwd.clone(),
+            agent_registry,
+            pane_scrollback,
+        })
+    }
+
     pub async fn collect_space_info(&self) -> SpaceInfo {
         let tabs = self.tabs.read().await;
         let tab_order = self.tab_order.read().await;
@@ -804,6 +961,96 @@ impl SpaceManager {
             shell,
             cwd,
         })
+    }
+
+    /// Create a `SpaceManager` with no initial spaces.
+    /// Used when restoring from a snapshot: the caller populates spaces via `try_restore`.
+    pub fn new_empty(
+        event_bus: broadcast::Sender<ServerEvent>,
+        shell: String,
+        cwd: String,
+    ) -> Self {
+        let agent_registry = AgentRegistry::new(event_bus.clone());
+        Self {
+            spaces: RwLock::new(HashMap::new()),
+            space_order: RwLock::new(Vec::new()),
+            active_space: RwLock::new(SpaceId(u32::MAX)),
+            next_space_id: AtomicU32::new(0),
+            next_pane_id: Arc::new(AtomicU32::new(0)),
+            next_tab_id: Arc::new(AtomicU32::new(0)),
+            event_bus,
+            agent_registry,
+            shell,
+            cwd,
+        }
+    }
+
+    /// Restore spaces from a `SessionSnapshot` saved at shutdown.
+    /// Advances all ID counters past the saved IDs, spawns PTY shells at saved cwds,
+    /// replays scrollback, and re-launches agent commands with a 1-second delay.
+    /// Returns an error (and the caller falls back to a fresh start) if the snapshot
+    /// is empty or any PTY spawn fails.
+    pub async fn try_restore(
+        &self,
+        snap: &crate::daemon::snapshot::SessionSnapshot,
+    ) -> anyhow::Result<()> {
+        if snap.spaces.is_empty() {
+            anyhow::bail!("snapshot contains no spaces — starting fresh");
+        }
+
+        for space_snap in &snap.spaces {
+            let space_id = SpaceId(space_snap.id);
+
+            // Advance all global counters past every ID in this snapshot so that
+            // any new space/tab/pane created after restore cannot collide.
+            self.next_space_id
+                .fetch_max(space_snap.id + 1, Ordering::SeqCst);
+            for tab_snap in &space_snap.tabs {
+                self.next_tab_id
+                    .fetch_max(tab_snap.id + 1, Ordering::SeqCst);
+                for pane_snap in &tab_snap.panes {
+                    self.next_pane_id
+                        .fetch_max(pane_snap.id + 1, Ordering::SeqCst);
+                }
+            }
+
+            let session = Arc::new(
+                SessionState::restore_from_snapshot(
+                    space_snap,
+                    self.event_bus.clone(),
+                    Arc::clone(&self.agent_registry),
+                    Arc::clone(&self.next_pane_id),
+                    Arc::clone(&self.next_tab_id),
+                    self.shell.clone(),
+                )
+                .await?,
+            );
+            Arc::clone(&session).spawn_scrollback_collector();
+
+            {
+                self.spaces.write().await.insert(space_id, session);
+            }
+            {
+                self.space_order.write().await.push(space_id);
+            }
+        }
+
+        // Restore active space; fall back to the first restored space if the saved
+        // ID is not present (e.g. partial snapshot or ID mismatch).
+        let desired = SpaceId(snap.active_space_id);
+        let exists = self.spaces.read().await.contains_key(&desired);
+        *self.active_space.write().await = if exists {
+            desired
+        } else {
+            self.space_order
+                .read()
+                .await
+                .first()
+                .copied()
+                .unwrap_or(SpaceId(u32::MAX))
+        };
+
+        Ok(())
     }
 
     pub async fn active_session(&self) -> Arc<SessionState> {
@@ -1040,6 +1287,85 @@ impl SpaceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn session_snapshot_restore_roundtrip() {
+        use crate::daemon::snapshot::{PaneSnapshot, SessionSnapshot, SpaceSnapshot, TabSnapshot};
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(16);
+        // Use a command that exits immediately so spawn_blocking PTY reader tasks
+        // see EOF quickly and do not keep the tokio runtime alive after the test.
+        // Locate `true` via `which` to handle non-FHS layouts (e.g. NixOS).
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let cwd = std::env::temp_dir().to_string_lossy().to_string();
+
+        let snap = SessionSnapshot {
+            active_space_id: 7,
+            spaces: vec![SpaceSnapshot {
+                id: 7,
+                name: "restored-space".to_string(),
+                cwd: cwd.clone(),
+                active_tab_id: 3,
+                tabs: vec![TabSnapshot {
+                    id: 3,
+                    name: "main".to_string(),
+                    active_pane_id: 5,
+                    panes: vec![PaneSnapshot {
+                        id: 5,
+                        cwd: cwd.clone(),
+                        scrollback: vec!["$ echo hello".to_string(), "hello".to_string()],
+                    }],
+                }],
+                agents: vec![],
+            }],
+        };
+
+        let sm = SpaceManager::new_empty(event_bus, shell, cwd);
+        sm.try_restore(&snap).await.expect("restore must succeed");
+
+        // Space was created with correct ID and name.
+        {
+            let spaces = sm.spaces.read().await;
+            assert_eq!(spaces.len(), 1, "expected exactly 1 restored space");
+            assert!(
+                spaces.contains_key(&SpaceId(7)),
+                "SpaceId(7) must be present"
+            );
+            let sess = spaces.get(&SpaceId(7)).unwrap();
+            assert_eq!(sess.space_name, "restored-space");
+        }
+
+        // Space order tracks it.
+        {
+            let order = sm.space_order.read().await;
+            assert_eq!(order.len(), 1);
+            assert_eq!(order[0], SpaceId(7));
+        }
+
+        // Active space restored correctly.
+        let active = *sm.active_space.read().await;
+        assert_eq!(active, SpaceId(7));
+
+        // ID counters must have been advanced past all saved IDs.
+        let next_space = sm.next_space_id.load(Ordering::Relaxed);
+        assert!(next_space >= 8, "next_space_id {next_space} must be > 7");
+        let next_tab = sm.next_tab_id.load(Ordering::Relaxed);
+        assert!(next_tab >= 4, "next_tab_id {next_tab} must be > 3");
+        let next_pane = sm.next_pane_id.load(Ordering::Relaxed);
+        assert!(next_pane >= 6, "next_pane_id {next_pane} must be > 5");
+
+        // Kill PTY children so spawn_blocking reader tasks get EOF and exit,
+        // allowing the tokio runtime to shut down cleanly after the test.
+        sm.shutdown_all().await;
+    }
 
     #[test]
     fn space_name_format() {

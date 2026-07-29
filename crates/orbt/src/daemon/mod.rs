@@ -12,7 +12,7 @@ use anyhow::{Context, Result};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions};
 use tokio::sync::broadcast;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use self::session::SpaceManager;
 use orbt_protocol::ServerEvent;
@@ -88,8 +88,31 @@ pub async fn run() -> Result<()> {
         .ok()
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| ".".to_string());
-    let space_manager = Arc::new(SpaceManager::new(event_bus, shell, cwd, 80, 24).await?);
-    info!("orbtd ready — 1 space, 1 pane");
+    // Restore from a saved snapshot if one exists; otherwise start with a fresh default space.
+    let space_manager: Arc<SpaceManager> = match crate::daemon::snapshot::load() {
+        Ok(Some(snap)) => {
+            let sm = SpaceManager::new_empty(event_bus.clone(), shell.clone(), cwd.clone());
+            match sm.try_restore(&snap).await {
+                Ok(()) => {
+                    let count = snap.spaces.len();
+                    crate::daemon::snapshot::delete();
+                    info!("session restored from snapshot ({count} space(s))");
+                    Arc::new(sm)
+                }
+                Err(e) => {
+                    warn!("session restore failed, starting fresh: {e:#}");
+                    crate::daemon::snapshot::delete();
+                    Arc::new(SpaceManager::new(event_bus, shell, cwd, 80, 24).await?)
+                }
+            }
+        }
+        Ok(None) => Arc::new(SpaceManager::new(event_bus, shell, cwd, 80, 24).await?),
+        Err(e) => {
+            warn!("could not read session snapshot: {e:#}");
+            Arc::new(SpaceManager::new(event_bus, shell, cwd, 80, 24).await?)
+        }
+    };
+    info!("orbtd ready");
 
     {
         let sm = space_manager.clone();

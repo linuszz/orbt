@@ -59,8 +59,7 @@ pub fn save(snap: &SessionSnapshot) -> anyhow::Result<()> {
 }
 
 /// Load the last saved snapshot from disk.
-/// Called by Task 5 (session restore on daemon startup).
-#[allow(dead_code)] // consumed by Task 5 (restore-on-startup)
+/// Returns `Ok(None)` if no snapshot file exists.
 pub fn load() -> anyhow::Result<Option<SessionSnapshot>> {
     let path = snapshot_path();
     if !path.exists() {
@@ -71,9 +70,8 @@ pub fn load() -> anyhow::Result<Option<SessionSnapshot>> {
     Ok(Some(snap))
 }
 
-/// Delete the snapshot file (called after successful restore so it isn't replayed).
-/// Called by Task 5 (session restore on daemon startup).
-#[allow(dead_code)] // consumed by Task 5 (restore-on-startup)
+/// Delete the snapshot file after a successful (or failed) restore attempt
+/// so it is not replayed on the next daemon startup.
 pub fn delete() {
     let _ = std::fs::remove_file(snapshot_path());
 }
