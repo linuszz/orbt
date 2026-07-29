@@ -104,7 +104,7 @@ pub struct PaneEntry {
 /// Single pane → `Leaf`; multiple panes → right-nested horizontal splits with equal ratios.
 fn build_pane_layout(pane_ids: &[PaneId]) -> PaneLayout {
     match pane_ids {
-        [] => PaneLayout::Leaf(PaneId(0)), // unreachable in practice
+        [] => unreachable!("build_pane_layout called with empty pane list"),
         [single] => PaneLayout::Leaf(*single),
         [first, rest @ ..] => PaneLayout::Split {
             direction: SplitDir::Horizontal,
@@ -740,8 +740,8 @@ impl SessionState {
                         }
                     }
 
-                    // Broadcast so any already-connected client (or one that connects
-                    // immediately after restore) receives the scrollback history.
+                    // Feed the server-side VT parser and broadcast to event bus;
+                    // clients that connect later will receive the full state via FullState sync.
                     let _ = event_bus.send(ServerEvent::PaneOutput {
                         pane_id,
                         data: joined.into_bytes(),
@@ -1015,7 +1015,7 @@ impl SpaceManager {
             }
 
             let session = Arc::new(
-                SessionState::restore_from_snapshot(
+                match SessionState::restore_from_snapshot(
                     space_snap,
                     self.event_bus.clone(),
                     Arc::clone(&self.agent_registry),
@@ -1023,7 +1023,15 @@ impl SpaceManager {
                     Arc::clone(&self.next_tab_id),
                     self.shell.clone(),
                 )
-                .await?,
+                .await
+                {
+                    Ok(s) => s,
+                    Err(e) => {
+                        // Shut down any PTYs that were already restored before propagating.
+                        self.shutdown_all().await;
+                        return Err(e);
+                    }
+                },
             );
             Arc::clone(&session).spawn_scrollback_collector();
 
