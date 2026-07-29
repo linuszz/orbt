@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 use orbt_core::config::config_dir;
+use orbt_protocol::PaneLayout;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionSnapshot {
@@ -28,6 +29,7 @@ pub struct TabSnapshot {
     pub name: String,
     pub active_pane_id: u32,
     pub panes: Vec<PaneSnapshot>,
+    pub layout: PaneLayout,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +104,7 @@ mod tests {
                         cwd: "/home/user".to_string(),
                         scrollback: vec!["$ ls".to_string()],
                     }],
+                    layout: PaneLayout::Leaf(orbt_protocol::PaneId(1)),
                 }],
                 agents: vec![],
             }],

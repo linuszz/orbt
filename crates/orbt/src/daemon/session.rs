@@ -100,21 +100,6 @@ pub struct PaneEntry {
     pub child: SharedChild,
 }
 
-/// Build a PaneLayout tree from an ordered slice of pane IDs.
-/// Single pane → `Leaf`; multiple panes → right-nested horizontal splits with equal ratios.
-fn build_pane_layout(pane_ids: &[PaneId]) -> PaneLayout {
-    match pane_ids {
-        [] => unreachable!("build_pane_layout called with empty pane list"),
-        [single] => PaneLayout::Leaf(*single),
-        [first, rest @ ..] => PaneLayout::Split {
-            direction: SplitDir::Horizontal,
-            first: Box::new(PaneLayout::Leaf(*first)),
-            second: Box::new(build_pane_layout(rest)),
-            ratio: 1.0 / pane_ids.len() as f32,
-        },
-    }
-}
-
 pub struct TabState {
     pub name: String,
     pub layout: PaneLayout,
@@ -654,6 +639,7 @@ impl SessionState {
                     name: tab.name.clone(),
                     active_pane_id: tab.active_pane.0,
                     panes: pane_snaps,
+                    layout: tab.layout.clone(),
                 });
             }
         }
@@ -788,7 +774,7 @@ impl SessionState {
             }
 
             let active_pane = PaneId(tab_snap.active_pane_id);
-            let layout = build_pane_layout(&pane_ids_in_tab);
+            let layout = tab_snap.layout.clone();
             tabs_map.insert(
                 tab_id,
                 TabState {
@@ -1359,6 +1345,7 @@ mod tests {
                         cwd: cwd.clone(),
                         scrollback: vec!["$ echo hello".to_string(), "hello".to_string()],
                     }],
+                    layout: PaneLayout::Leaf(PaneId(5)),
                 }],
                 agents: vec![],
             }],
