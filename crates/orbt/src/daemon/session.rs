@@ -707,12 +707,29 @@ impl SessionState {
                 let pane_id = PaneId(pane_snap.id);
                 pane_ids_in_tab.push(pane_id);
 
-                let handles =
-                    pty::spawn_pty(pane_id, &shell, &pane_snap.cwd, 80, 24, event_bus.clone())
-                        .await
-                        .with_context(|| {
-                            format!("restore: failed to spawn PTY for pane {}", pane_id.0)
-                        })?;
+                let handles = match pty::spawn_pty(
+                    pane_id,
+                    &shell,
+                    &pane_snap.cwd,
+                    80,
+                    24,
+                    event_bus.clone(),
+                )
+                .await
+                .with_context(|| format!("restore: failed to spawn PTY for pane {}", pane_id.0))
+                {
+                    Ok(h) => h,
+                    Err(e) => {
+                        // Kill every PTY that was already spawned in this restore attempt
+                        // to avoid leaking child processes.
+                        for entry in panes_map.values() {
+                            if let Ok(mut child) = entry.child.lock() {
+                                let _ = child.kill();
+                            }
+                        }
+                        return Err(e);
+                    }
+                };
 
                 if let Some(pid) = handles.child_pid {
                     Arc::clone(&agent_registry).watch_pane(pane_id, space_id, pid);
@@ -757,6 +774,17 @@ impl SessionState {
                         child: handles.child,
                     },
                 );
+            }
+
+            // Guard: a tab with no panes would panic in build_pane_layout.
+            // Skip it gracefully — the rest of the snapshot is still usable.
+            if pane_ids_in_tab.is_empty() {
+                tracing::warn!(
+                    "skipping tab {} ({}) in snapshot: no panes",
+                    tab_snap.id,
+                    tab_snap.name
+                );
+                continue;
             }
 
             let active_pane = PaneId(tab_snap.active_pane_id);

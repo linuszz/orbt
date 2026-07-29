@@ -1141,6 +1141,12 @@ impl App {
                 if self.eclipse_modal.as_ref().map(|m| m.agent_id) == Some(*id) {
                     self.eclipse_modal = None;
                 }
+                // Dismiss Agent Detail modal if it belongs to this agent.
+                if let Some(m) = &self.agent_detail_modal {
+                    if m.agent_id == *id {
+                        self.agent_detail_modal = None;
+                    }
+                }
                 self.agent_start_times.remove(id);
                 self.agent_blocked_times.remove(id);
                 self.agent_metrics.remove(id);

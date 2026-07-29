@@ -101,7 +101,9 @@ pub async fn run() -> Result<()> {
                 }
                 Err(e) => {
                     warn!("session restore failed, starting fresh: {e:#}");
-                    crate::daemon::snapshot::delete();
+                    // Do NOT delete the snapshot on failure — leave it on disk for
+                    // post-mortem diagnostics. It will be overwritten on the next
+                    // clean shutdown.
                     Arc::new(SpaceManager::new(event_bus, shell, cwd, 80, 24).await?)
                 }
             }

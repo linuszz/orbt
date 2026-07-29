@@ -54,7 +54,11 @@ pub fn save(snap: &SessionSnapshot) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)?;
     }
     let toml_str = toml::to_string_pretty(snap)?;
-    std::fs::write(&path, toml_str)?;
+    // Write atomically: write to .tmp then rename so a crash mid-write does not
+    // corrupt the existing snapshot.
+    let tmp_path = path.with_extension("toml.tmp");
+    std::fs::write(&tmp_path, &toml_str)?;
+    std::fs::rename(&tmp_path, &path)?;
     Ok(())
 }
 

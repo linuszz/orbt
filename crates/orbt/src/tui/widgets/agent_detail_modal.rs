@@ -142,7 +142,11 @@ pub fn open(app: &mut App, agent_id: AgentId) {
         total_tool_calls,
         files_touched,
         tool_scroll: 0,
-        recent_output_lines: vec![],
+        recent_output_lines: app
+            .agent_metrics
+            .get(&agent_id)
+            .map(|m| m.recent_lines.clone())
+            .unwrap_or_default(),
     });
     app.needs_redraw = true;
 }
