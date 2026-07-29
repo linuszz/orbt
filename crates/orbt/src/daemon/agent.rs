@@ -123,6 +123,7 @@ impl AgentRegistry {
     pub async fn remove_agent(&self, agent_id: AgentId) {
         self.agents.write().await.retain(|a| a.id != agent_id);
         self.pid_map.write().await.remove(&agent_id);
+        self.output_history.write().await.remove(&agent_id);
         let _ = self.event_bus.send(ServerEvent::AgentRemoved(agent_id));
         debug!("agent removed by user: id={agent_id:?}");
     }
@@ -158,6 +159,7 @@ impl AgentRegistry {
     }
 
     /// Return all stored output lines for `agent_id`, oldest-first.
+    /// Note: ring buffer writes are Linux-only via watch_pane; on macOS history is always empty.
     /// Used by Task 3 (TUI detail modal); suppressed until that wiring lands.
     #[allow(dead_code)]
     pub async fn get_output_history(&self, agent_id: AgentId) -> Vec<String> {
