@@ -586,11 +586,19 @@ impl SessionState {
                         let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
                         for line in stripped.lines() {
                             let trimmed = line.trim();
-                            if !trimmed.is_empty() {
-                                buf.push_back(trimmed.to_string());
-                                if buf.len() > 500 {
-                                    buf.pop_front();
-                                }
+                            // Filter terminal protocol garbage that slips through strip_ansi:
+                            // - DCS/XTGETTCAP hex payloads ("+q..." after stripping the \x1bP)
+                            // - Isolated backspace characters (\x08 keystroke echoes)
+                            // - Lines that are purely non-printable after trimming
+                            if trimmed.is_empty()
+                                || trimmed.starts_with("+q")
+                                || trimmed.chars().all(|c| c.is_ascii_control())
+                            {
+                                continue;
+                            }
+                            buf.push_back(trimmed.to_string());
+                            if buf.len() > 500 {
+                                buf.pop_front();
                             }
                         }
                     }
@@ -667,9 +675,9 @@ impl SessionState {
     }
 
     /// Reconstruct a `SessionState` from a saved `SpaceSnapshot`.
-    /// Spawns one PTY shell per pane at the saved `cwd`, pre-populates the scrollback buffer,
-    /// broadcasts saved scrollback as `PaneOutput` events so clients see history on reconnect,
-    /// and schedules a 1-second delayed re-launch for any saved agent commands.
+    /// Spawns one PTY shell per pane at the saved `cwd`, pre-populates the in-memory scrollback
+    /// ring buffer so history survives into the next snapshot cycle, and schedules a 1-second
+    /// delayed re-launch for any saved agent commands.
     pub async fn restore_from_snapshot(
         snap: &crate::daemon::snapshot::SpaceSnapshot,
         event_bus: broadcast::Sender<ServerEvent>,
@@ -721,34 +729,20 @@ impl SessionState {
                     Arc::clone(&agent_registry).watch_pane(pane_id, space_id, pid);
                 }
 
+                // Pre-populate the in-memory scrollback ring buffer so history
+                // survives into the next save_snapshot cycle. Do NOT replay these
+                // stripped text lines through the VT parser — the parser expects raw
+                // terminal sequences and would produce garbled cell content from
+                // plain text. The cell grid starts fresh from the newly-spawned shell.
                 if !pane_snap.scrollback.is_empty() {
-                    let joined = pane_snap.scrollback.join("\r\n") + "\r\n";
-
-                    // Feed scrollback into the server-side cell grid so the first
-                    // SpaceInfo snapshot sent to a reconnecting client is meaningful.
-                    if let Ok(mut parser) = handles.parser.lock() {
-                        parser.process(joined.as_bytes());
-                    }
-
-                    // Pre-populate the in-memory scrollback buffer so the next
-                    // save_snapshot includes these lines again.
-                    {
-                        let mut sb = pane_scrollback.write().await;
-                        let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
-                        for line in &pane_snap.scrollback {
-                            buf.push_back(line.clone());
-                            if buf.len() > 500 {
-                                buf.pop_front();
-                            }
+                    let mut sb = pane_scrollback.write().await;
+                    let buf = sb.entry(pane_id).or_insert_with(VecDeque::new);
+                    for line in &pane_snap.scrollback {
+                        buf.push_back(line.clone());
+                        if buf.len() > 500 {
+                            buf.pop_front();
                         }
                     }
-
-                    // Feed the server-side VT parser and broadcast to event bus;
-                    // clients that connect later will receive the full state via FullState sync.
-                    let _ = event_bus.send(ServerEvent::PaneOutput {
-                        pane_id,
-                        data: joined.into_bytes(),
-                    });
                 }
 
                 panes_map.insert(
