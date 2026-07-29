@@ -840,6 +840,19 @@ impl SpaceManager {
         }
     }
 
+    /// Kill every PTY child in every space — called from the signal handler before exit.
+    pub async fn shutdown_all(&self) {
+        let spaces = self.spaces.read().await;
+        for session in spaces.values() {
+            let panes = session.panes.read().await;
+            for entry in panes.values() {
+                if let Ok(mut child) = entry.child.lock() {
+                    let _ = child.kill();
+                }
+            }
+        }
+    }
+
     /// Background task: every `interval_ms` milliseconds, re-read the active pane's
     /// cwd for every space and broadcast SpaceUpdated if it changed.
     pub async fn poll_cwd_changes(&self, interval_ms: u64) {

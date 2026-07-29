@@ -4,9 +4,10 @@ pub mod ipc;
 pub mod pty;
 pub mod session;
 
+use std::path::Path;
 use std::sync::Arc;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use interprocess::local_socket::tokio::prelude::*;
 use interprocess::local_socket::{GenericFilePath, ListenerOptions};
 use tokio::sync::broadcast;
@@ -21,28 +22,46 @@ fn lock_file_path() -> std::path::PathBuf {
     default_socket_path().with_extension("lock")
 }
 
-fn acquire_lock() -> Result<()> {
-    let path = lock_file_path();
-    if path.exists() {
-        let pid_str = std::fs::read_to_string(&path)?;
-        let pid: u32 = pid_str.trim().parse().unwrap_or(0);
-        #[cfg(unix)]
-        if pid > 0 && unsafe { libc::kill(pid as i32, 0) } == 0 {
-            bail!("orbtd already running (PID {pid})");
+/// Atomically acquire the lock file using O_CREAT|O_EXCL semantics.
+/// If the file already exists, checks whether the recorded PID is still alive.
+/// On non-unix, a stale lock is always overwritten.
+fn acquire_lock(path: &Path) -> Result<()> {
+    use std::io::Write;
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(path)
+    {
+        Ok(mut f) => {
+            write!(f, "{}", std::process::id())?;
+            Ok(())
         }
-        #[cfg(not(unix))]
-        let _ = pid;
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            // Stale lock? Check if the recorded PID is still alive.
+            #[cfg(unix)]
+            {
+                let pid: u32 = std::fs::read_to_string(path)
+                    .ok()
+                    .and_then(|s| s.trim().parse().ok())
+                    .unwrap_or(0);
+                if pid > 0 && unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 {
+                    anyhow::bail!("orbtd already running (PID {pid})");
+                }
+            }
+            std::fs::write(path, std::process::id().to_string())?;
+            Ok(())
+        }
+        Err(e) => Err(e.into()),
     }
-    std::fs::write(&path, std::process::id().to_string())?;
-    Ok(())
 }
 
-fn release_lock() {
-    let _ = std::fs::remove_file(lock_file_path());
+fn release_lock(path: &Path) {
+    let _ = std::fs::remove_file(path);
 }
 
 pub async fn run() -> Result<()> {
-    acquire_lock().context("failed to acquire lock")?;
+    let lock_path = lock_file_path();
+    acquire_lock(&lock_path).context("failed to acquire lock")?;
 
     let socket_path = default_socket_path();
     let name = socket_path
@@ -80,12 +99,15 @@ pub async fn run() -> Result<()> {
         res = accept_loop(listener, space_manager.clone()) => {
             if let Err(e) = res { error!("accept loop error: {e:#}"); }
         }
-        _ = wait_for_signal() => {}
+        _ = wait_for_signal() => {
+            info!("stopping orbtd");
+            // Task 4 hook: space_manager.save_snapshot().await;
+            space_manager.shutdown_all().await;
+        }
     }
 
-    info!("orbtd stopping...");
     let _ = std::fs::remove_file(&socket_path);
-    release_lock();
+    release_lock(&lock_path);
     info!("orbtd stopped");
     Ok(())
 }
@@ -118,5 +140,20 @@ async fn accept_loop(
                 error!("client error: {e:#}");
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lock_file_no_race_on_fresh_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("test.lock");
+        acquire_lock(&path).expect("first acquire should succeed");
+        // Second acquire on same path while this process is alive must fail.
+        let result = acquire_lock(&path);
+        assert!(result.is_err(), "second acquire should fail with live PID");
     }
 }
