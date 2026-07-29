@@ -142,6 +142,7 @@ pub fn open(app: &mut App, agent_id: AgentId) {
         total_tool_calls,
         files_touched,
         tool_scroll: 0,
+        recent_output_lines: vec![],
     });
     app.needs_redraw = true;
 }
@@ -379,6 +380,50 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
             }
             frame.render_widget(
                 Paragraph::new(Line::from(spans)),
+                Rect {
+                    x: ix,
+                    y: row,
+                    width: iw,
+                    height: 1,
+                },
+            );
+            row += 1;
+        }
+    }
+
+    // Output section: last ≤10 lines from the heuristic ring buffer, newest at bottom.
+    if row <= content_bottom && !modal.recent_output_lines.is_empty() {
+        let divider = format!(
+            "\u{2500}\u{2500} Output {}",
+            "\u{2500}".repeat(iw.saturating_sub(10) as usize)
+        );
+        frame.render_widget(
+            Line::from(Span::styled(divider, Style::default().fg(fg_muted()))),
+            Rect {
+                x: ix,
+                y: row,
+                width: iw,
+                height: 1,
+            },
+        );
+        row += 1;
+        for line in modal
+            .recent_output_lines
+            .iter()
+            .rev()
+            .take(10)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+        {
+            if row > content_bottom {
+                break;
+            }
+            frame.render_widget(
+                Line::from(Span::styled(
+                    format!("  {}", line),
+                    Style::default().fg(fg_muted()),
+                )),
                 Rect {
                     x: ix,
                     y: row,

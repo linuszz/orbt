@@ -265,6 +265,8 @@ pub struct AgentDetailModalState {
     pub files_touched: Vec<FileTouched>,
     // UI scroll state
     pub tool_scroll: usize,
+    /// Cached output lines from the most recent AgentMetricsUpdated event.
+    pub recent_output_lines: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1179,6 +1181,11 @@ impl App {
             }
             ServerEvent::AgentMetricsUpdated { agent_id, metrics } => {
                 self.agent_metrics.insert(*agent_id, metrics.clone());
+                if let Some(m) = &mut self.agent_detail_modal {
+                    if m.agent_id == *agent_id {
+                        m.recent_output_lines = metrics.recent_lines.clone();
+                    }
+                }
                 self.needs_redraw = true;
             }
             ServerEvent::AgentAcpUpdated { agent_id, data } => {
