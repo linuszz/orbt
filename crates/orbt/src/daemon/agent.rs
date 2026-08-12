@@ -368,11 +368,19 @@ impl AgentRegistry {
                                 if tracked.contains_key(cpid) {
                                     continue;
                                 }
-                                if let Some(name) = agent_name_for(*cpid) {
+                                // Read /proc/{cpid}/cmdline once and reuse for all
+                                // three extract functions so we pay one fs read not three.
+                                let cmdline = read_cmdline(*cpid);
+                                if let Some(name) =
+                                    agent_name_from_cmdline(cmdline.as_deref())
+                                {
                                     let id =
                                         AgentId(self.next_id.fetch_add(1, Ordering::Relaxed));
-                                    let model = extract_model(*cpid).unwrap_or_default();
-                                    let task = extract_task(*cpid);
+                                    let model = extract_model_from_cmdline(
+                                        *cpid,
+                                        cmdline.as_deref(),
+                                    );
+                                    let task = extract_task_from_cmdline(cmdline.as_deref());
                                     let protocol = if ACP_CAPABLE_AGENTS.contains(&name.as_str()) {
                                         AgentProtocol::AcpCapable
                                     } else {
@@ -381,6 +389,7 @@ impl AgentRegistry {
                                     // Pull any pending launch command registered for this pane.
                                     let launch_cmd =
                                         self.pending_launch_cmds.write().await.remove(&pane_id);
+                                    let agent_cli = extract_agent_cli(&name);
                                     let info = AgentInfo {
                                         id,
                                         name,
@@ -390,6 +399,10 @@ impl AgentRegistry {
                                         status: AgentStatus::Working,
                                         detail: Some(AgentDetail {
                                             task,
+                                            agent_cli,
+                                            // TODO: populate from ACP protocol extension
+                                            context_percent: None,
+                                            compaction_count: 0,
                                             ..Default::default()
                                         }),
                                         protocol,
@@ -533,14 +546,27 @@ impl AgentRegistry {
     }
 }
 
-/// Returns the canonical agent name for a PID if it is a known agent process.
+/// Extract a short agent CLI identifier from the detected agent name.
+/// Heuristic: look for known names as substrings; fall back to the first word.
 #[cfg(target_os = "linux")]
-fn agent_name_for(pid: u32) -> Option<String> {
-    let cmdline = read_cmdline(pid)?;
-    let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
-    agent_name_from_args(&args)
+fn extract_agent_cli(name: &str) -> String {
+    let lower = name.to_lowercase();
+    if lower.contains("claude") {
+        "claude".to_string()
+    } else if lower.contains("codex") {
+        "codex".to_string()
+    } else if lower.contains("copilot") {
+        "copilot".to_string()
+    } else if lower.contains("opencode") {
+        "opencode".to_string()
+    } else if lower.contains("aider") {
+        "aider".to_string()
+    } else {
+        name.split_whitespace().next().unwrap_or("").to_string()
+    }
 }
 
+/// Returns the canonical agent name for a PID if it is a known agent process.
 /// Pure matching logic: returns the canonical agent name given a cmdline argv slice.
 /// `args[0]` is argv[0] (the executable name as the OS saw it, preserved through Nix wrappers).
 #[cfg(target_os = "linux")]
@@ -581,24 +607,26 @@ fn agent_name_from_args(args: &[&str]) -> Option<String> {
     None
 }
 
-/// Extract the `--model` value from a process cmdline, if present.
-/// Also reads OPENCODE_MODEL from process environment for opencode.
 #[cfg(target_os = "linux")]
-fn extract_model(pid: u32) -> Option<String> {
-    let cmdline = read_cmdline(pid)?;
-    let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
+fn agent_name_from_cmdline(cmdline: Option<&str>) -> Option<String> {
+    let args: Vec<&str> = cmdline?.split('\0').filter(|s| !s.is_empty()).collect();
+    agent_name_from_args(&args)
+}
 
-    // Check cmdline flags first (works for all agents including opencode).
+#[cfg(target_os = "linux")]
+fn extract_model_from_cmdline(pid: u32, cmdline: Option<&str>) -> String {
+    let Some(cmdline) = cmdline else {
+        return String::new();
+    };
+    let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
     for (i, arg) in args.iter().enumerate() {
         if *arg == "--model" || *arg == "-m" {
-            return args.get(i + 1).map(|s| s.to_string());
+            return args.get(i + 1).map(|s| s.to_string()).unwrap_or_default();
         }
         if let Some(model) = arg.strip_prefix("--model=") {
-            return Some(model.to_string());
+            return model.to_string();
         }
     }
-
-    // opencode falls back to OPENCODE_MODEL env var.
     let exe = args.first().copied().unwrap_or("");
     let basename = std::path::Path::new(exe)
         .file_name()
@@ -608,20 +636,17 @@ fn extract_model(pid: u32) -> Option<String> {
         if let Ok(env) = std::fs::read_to_string(format!("/proc/{pid}/environ")) {
             for entry in env.split('\0') {
                 if let Some(val) = entry.strip_prefix("OPENCODE_MODEL=") {
-                    return Some(val.to_string());
+                    return val.to_string();
                 }
             }
         }
     }
-
-    None
+    String::new()
 }
 
-/// Extract a short task description from positional (non-flag) cmdline args.
 #[cfg(target_os = "linux")]
-fn extract_task(pid: u32) -> Option<String> {
-    let cmdline = read_cmdline(pid)?;
-    let args: Vec<&str> = cmdline.split('\0').filter(|s| !s.is_empty()).collect();
+fn extract_task_from_cmdline(cmdline: Option<&str>) -> Option<String> {
+    let args: Vec<&str> = cmdline?.split('\0').filter(|s| !s.is_empty()).collect();
     let positional: Vec<&str> = args
         .iter()
         .skip(1)
@@ -631,14 +656,12 @@ fn extract_task(pid: u32) -> Option<String> {
     if positional.is_empty() {
         return None;
     }
-    Some(
-        positional
-            .iter()
-            .take(2)
-            .copied()
-            .collect::<Vec<_>>()
-            .join(" "),
-    )
+    let task: String = positional.join(" ");
+    if task.len() > 60 {
+        Some(format!("{}…", &task[..60]))
+    } else {
+        Some(task)
+    }
 }
 
 #[cfg(target_os = "linux")]
