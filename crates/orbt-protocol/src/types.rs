@@ -24,8 +24,9 @@ pub enum SplitDir {
     Vertical,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AgentStatus {
+    #[default]
     Idle,
     Working,
     Blocked,
@@ -37,11 +38,20 @@ pub enum AgentStatus {
 pub struct AgentDetail {
     pub task: Option<String>,
     pub block_msg: Option<String>,
-    pub progress: Option<f32>,
+    pub progress: Option<f32>, // generic progress bar (keep; separate from context_percent)
     pub duration_s: u32,
     /// Populated only for ACP-connected agents.
     #[serde(default)]
     pub acp: Option<AcpDetail>,
+    /// Context window usage as a fraction 0.0–1.0.
+    #[serde(default)]
+    pub context_percent: Option<f32>,
+    /// Number of /compact operations performed in this session.
+    #[serde(default)]
+    pub compaction_count: u32,
+    /// Agent CLI identifier: "claude" | "codex" | "copilot" | etc.
+    #[serde(default)]
+    pub agent_cli: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,6 +71,10 @@ pub struct ToolCall {
     pub status: ToolCallStatus,
     /// Wall-clock duration in ms; None while Running.
     pub duration_ms: Option<u32>,
+    /// Complete tool output, capped to 8 KiB on the daemon side.
+    /// None when not yet captured or not available.
+    #[serde(default)]
+    pub output: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -78,6 +92,13 @@ pub struct FileTouched {
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SubAgentInfo {
+    pub name: String,
+    pub status: AgentStatus,
+    pub tokens: u64,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct AcpDetail {
     /// Tool call currently executing, if any.
     pub current_tool: Option<ToolCall>,
@@ -89,6 +110,21 @@ pub struct AcpDetail {
     pub tokens_out: u32,
     /// Deduplicated, newest-first, capped at 20.
     pub files_touched: Vec<FileTouched>,
+    /// Conversation turns (assistant reply count).
+    #[serde(default)]
+    pub turn_count: u32,
+    /// Agent session identifier, truncated to 8 chars for display.
+    #[serde(default)]
+    pub session_id: String,
+    /// Agent CLI version string.
+    #[serde(default)]
+    pub agent_version: String,
+    /// Per-turn input token counts for context sparkline; newest-last, capped at 20.
+    #[serde(default)]
+    pub context_history: Vec<u32>,
+    /// Active sub-agents spawned by this agent.
+    #[serde(default)]
+    pub subagents: Vec<SubAgentInfo>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -403,6 +439,7 @@ mod tests {
                     args_summary: "cargo test".into(),
                     status: ToolCallStatus::Running,
                     duration_ms: None,
+                    output: None,
                 }),
                 recent_tools: vec![ToolCall {
                     id: 2,
@@ -410,6 +447,7 @@ mod tests {
                     args_summary: "src/lib.rs".into(),
                     status: ToolCallStatus::Done,
                     duration_ms: Some(50),
+                    output: None,
                 }],
                 total_tool_calls: 3,
                 tokens_in: 14_203,
@@ -418,7 +456,15 @@ mod tests {
                     path: "src/lib.rs".into(),
                     kind: FileKind::Modified,
                 }],
+                turn_count: 0,
+                session_id: String::new(),
+                agent_version: String::new(),
+                context_history: vec![],
+                subagents: vec![],
             }),
+            context_percent: None,
+            compaction_count: 0,
+            agent_cli: String::new(),
         };
         let bytes = encode_to_vec(&detail, standard()).unwrap();
         let (decoded, _): (AgentDetail, usize) = decode_from_slice(&bytes, standard()).unwrap();

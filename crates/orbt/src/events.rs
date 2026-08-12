@@ -8,7 +8,7 @@ use tracing::debug;
 
 use crate::ipc::{IpcReader, IpcWriter};
 use orbt_tui::app::{
-    AgentHover, AgentPanelMode, App, ContextMenuItem, ContextMenuTarget, InputMode,
+    Action, AgentHover, AgentPanelMode, App, ContextMenuItem, ContextMenuTarget, InputMode,
     MobileCloseConfirm, MobileCloseTarget, MobileColFocus, MobileView, COMMANDS,
 };
 use orbt_tui::tui::{
@@ -1151,6 +1151,79 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                 }
                 KeyCode::Char('q') | KeyCode::Esc => {
                     app.mode = InputMode::Normal;
+                }
+                _ => {}
+            }
+            app.needs_redraw = true;
+        }
+        InputMode::AgentFullScreen {
+            left_selected,
+            right_selected,
+            focus_right,
+        } => {
+            if is_prefix_key(&key) {
+                app.mode = InputMode::CommandPalette {
+                    search: String::new(),
+                    selected: 0,
+                    search_focused: false,
+                };
+                app.needs_redraw = true;
+                return;
+            }
+            match key.code {
+                KeyCode::Esc => {
+                    app.update(Action::ToggleAgentPanel);
+                    orbt_tui::app::save_settings(app);
+                    return;
+                }
+                KeyCode::Tab => {
+                    *focus_right = !*focus_right;
+                }
+                KeyCode::Char('j') | KeyCode::Down => {
+                    if *focus_right {
+                        *right_selected = right_selected.saturating_sub(1);
+                    } else {
+                        *left_selected = left_selected.saturating_add(1).min(app.agents.len().saturating_sub(1));
+                        *right_selected = 0;
+                    }
+                }
+                KeyCode::Char('k') | KeyCode::Up => {
+                    if *focus_right {
+                        *right_selected = right_selected.saturating_sub(1);
+                    } else {
+                        *left_selected = left_selected.saturating_sub(1);
+                        *right_selected = 0;
+                    }
+                }
+                KeyCode::Char('q') => {
+                    app.mode = InputMode::Normal;
+                }
+                _ => {}
+            }
+            app.needs_redraw = true;
+        }
+        InputMode::PromptInput { agent_id, input } => {
+            match key.code {
+                KeyCode::Esc => {
+                    app.update(Action::ClosePromptInput);
+                }
+                KeyCode::Enter => {
+                    let response = input.clone();
+                    if !response.is_empty() {
+                        let _ = writer
+                            .send(ClientMessage::AgentRespond {
+                                agent_id: *agent_id,
+                                response,
+                            })
+                            .await;
+                    }
+                    app.update(Action::ClosePromptInput);
+                }
+                KeyCode::Char(c) => {
+                    input.push(c);
+                }
+                KeyCode::Backspace => {
+                    input.pop();
                 }
                 _ => {}
             }

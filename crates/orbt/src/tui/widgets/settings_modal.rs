@@ -67,7 +67,6 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let sidebar_display = if app.sidebar_visible { "On" } else { "Off" };
     let agent_display = match app.agent_panel_mode {
         AgentPanelMode::Sidebar => "Sidebar",
-        AgentPanelMode::Modal => "Modal",
         AgentPanelMode::Hidden => "Off",
     };
 

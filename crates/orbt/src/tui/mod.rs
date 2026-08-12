@@ -159,9 +159,6 @@ pub fn render(frame: &mut Frame, app: &App) {
                 };
                 widgets::agent_monitor::render(frame, agent_area, app);
             }
-            AgentPanelMode::Modal => {
-                widgets::agent_monitor::render_modal(frame, area, app);
-            }
             AgentPanelMode::Hidden => {}
         }
     }
@@ -220,17 +217,45 @@ pub fn render(frame: &mut Frame, app: &App) {
         widgets::command_palette::render(frame, area, app);
     }
 
-    if app.launch_modal.is_some() {
-        widgets::launch_modal::render(frame, area, app);
-    }
-
     if app.agent_fleet_enabled {
-        if app.eclipse_modal.is_some() {
-            widgets::eclipse_modal::render(frame, area, app);
+        if matches!(
+            app.mode,
+            crate::app::InputMode::AgentFullScreen { .. }
+                | crate::app::InputMode::PromptInput { .. }
+        ) {
+            let any_blocked = app
+                .agents
+                .iter()
+                .any(|a| a.status == orbt_protocol::AgentStatus::Blocked);
+            let modal_area = widgets::agent_monitor::fs_modal_layout(area, any_blocked).area;
+            let buf = frame.buffer_mut();
+            let buf_area = buf.area;
+            for cy in buf_area.y..buf_area.y + buf_area.height {
+                for cx in buf_area.x..buf_area.x + buf_area.width {
+                    let in_modal = cx >= modal_area.x
+                        && cx < modal_area.x + modal_area.width
+                        && cy >= modal_area.y
+                        && cy < modal_area.y + modal_area.height;
+                    if !in_modal {
+                        let cell = &mut buf[(cx, cy)];
+                        cell.modifier.insert(Modifier::DIM);
+                    }
+                }
+            }
+            widgets::agent_monitor::render_fullscreen_modal(frame, area, app);
         }
         if app.agent_detail_modal.is_some() {
             widgets::agent_detail_modal::render(frame, area, app);
         }
+        if app.eclipse_modal.is_some() {
+            widgets::eclipse_modal::render(frame, area, app);
+        }
+        widgets::agent_monitor::render_inspect_overlay(frame, area, app);
+        widgets::agent_monitor::render_toast(frame, area, app);
+    }
+
+    if app.launch_modal.is_some() {
+        widgets::launch_modal::render(frame, area, app);
     }
 
     if app.settings_open {
@@ -950,6 +975,9 @@ mod tests {
                 progress: Some(0.5),
                 duration_s: 120,
                 acp: None,
+                context_percent: None,
+                compaction_count: 0,
+                agent_cli: String::new(),
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
             launch_cmd: None,
@@ -985,6 +1013,9 @@ mod tests {
                 progress: None,
                 duration_s: 30,
                 acp: None,
+                context_percent: None,
+                compaction_count: 0,
+                agent_cli: String::new(),
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
             launch_cmd: None,

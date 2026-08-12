@@ -67,31 +67,57 @@ pub struct MobileCloseConfirm {
 }
 
 /// How the Agent Fleet panel is displayed.
+///
+/// Two user-facing forms exist: Sidebar (fixed right column) and Modal (the
+/// full-screen overlay, which is an `InputMode`, not a variant here — while it
+/// is open, `agent_panel_mode` stays Hidden). Unknown persisted values
+/// (e.g. the removed floating-window "modal") deserialize to Hidden.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentPanelMode {
-    /// Hidden — panel not shown.
-    #[default]
-    Hidden,
     /// Sidebar — panel occupies a fixed column on the right side of the layout.
     Sidebar,
-    /// Modal — panel floats as a centered overlay over the main pane area.
-    Modal,
+    /// Hidden — panel not shown.
+    #[default]
+    #[serde(other)]
+    Hidden,
 }
 
 impl AgentPanelMode {
-    /// Cycle: Hidden → Sidebar → Modal → Hidden.
+    /// Toggle: Hidden ↔ Sidebar.
     pub fn cycle(self) -> Self {
         match self {
             Self::Hidden => Self::Sidebar,
-            Self::Sidebar => Self::Modal,
-            Self::Modal => Self::Hidden,
+            Self::Sidebar => Self::Hidden,
         }
     }
 
     pub fn is_visible(self) -> bool {
         !matches!(self, Self::Hidden)
     }
+}
+
+/// How the Agent Monitor renders individual agents within the panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AgentMonitorMode {
+    /// Compact 2-row table format (auto-selected when panel inner width <= 30).
+    Compact,
+    /// Card format with box borders and action buttons.
+    #[default]
+    Card,
+}
+
+/// Which display form the Agent Fleet panel is in: Sidebar, or Modal (the
+/// full-screen overlay; `InputMode::AgentFullScreen` in code). Persisted as
+/// `agent_last_form` in settings.toml.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum PanelForm {
+    #[default]
+    Sidebar,
+    /// Accept the pre-rename persisted value as well.
+    #[serde(alias = "full_screen")]
+    Modal,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -108,6 +134,8 @@ pub struct UserSettings {
     /// false — the feature is not shown until explicitly opted in.
     #[serde(default)]
     pub agent_fleet_enabled: bool,
+    #[serde(default)]
+    pub agent_last_form: PanelForm,
 }
 
 impl Default for UserSettings {
@@ -118,6 +146,7 @@ impl Default for UserSettings {
             agent_panel_mode: AgentPanelMode::Hidden,
             agent_panel_visible: false,
             agent_fleet_enabled: false,
+            agent_last_form: PanelForm::Sidebar,
         }
     }
 }
@@ -140,6 +169,9 @@ pub fn load_settings() -> UserSettings {
     if s.agent_panel_mode == AgentPanelMode::Hidden && s.agent_panel_visible {
         s.agent_panel_mode = AgentPanelMode::Sidebar;
     }
+    if !matches!(s.agent_panel_mode, AgentPanelMode::Hidden) {
+        s.agent_last_form = PanelForm::Sidebar;
+    }
     s
 }
 
@@ -150,6 +182,7 @@ pub fn save_settings(app: &App) {
         agent_panel_mode: app.agent_panel_mode,
         agent_panel_visible: false,
         agent_fleet_enabled: app.agent_fleet_enabled,
+        agent_last_form: app.last_panel_form,
     };
     let path = settings_path();
     if let Some(parent) = path.parent() {
@@ -231,6 +264,13 @@ pub struct LaunchModalState {
     pub cwd: String,
 }
 
+/// State for the Inspect Overlay — a full-detail view of a single `ToolCall`.
+#[derive(Debug, Clone)]
+pub struct InspectOverlayState {
+    pub tool_call: ToolCall,
+    pub scroll: usize,
+}
+
 /// State for the Satellite Eclipse intervention modal.
 #[derive(Debug, Clone)]
 pub struct EclipseModalState {
@@ -284,6 +324,34 @@ pub enum InputMode {
     AgentPanel {
         selected: usize,
     },
+    /// Full Screen Agent Fleet modal (85% of terminal, floating).
+    AgentFullScreen {
+        left_selected: usize,
+        right_selected: usize,
+        focus_right: bool,
+    },
+    /// Inline prompt input bar for sending a new task to an Idle agent.
+    PromptInput {
+        agent_id: AgentId,
+        input: String,
+    },
+}
+
+/// Actions that mutate `App` state through the single `App::update()` entry point.
+///
+/// Variants without IPC side-effects belong here. Actions that also require sending
+/// a `ClientMessage` are handled in `events.rs` before or after calling `update()`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Action {
+    Noop,
+    ToggleAgentMonitorMode,
+    ToggleAgentPanel,
+    CycleAgentPanelForm,
+    Tick,
+    StartPromptInput(AgentId),
+    OpenInspectOverlay(ToolCall),
+    CloseInspectOverlay,
+    ClosePromptInput,
 }
 
 pub struct CommandDef {
@@ -368,7 +436,13 @@ pub static COMMANDS: &[CommandDef] = &[
         id: "toggle_agent",
         label: "Toggle Agent Monitor",
         group: "View",
-        shortcut: "a",
+        shortcut: "",
+    },
+    CommandDef {
+        id: "agent_panel_switch",
+        label: "Agent Panel: Switch Form",
+        group: "View",
+        shortcut: "s",
     },
     CommandDef {
         id: "toggle_theme",
@@ -470,6 +544,25 @@ pub enum AgentHover {
     },
     /// "[+] Add Satellite" footer button at the bottom of the panel.
     PanelFooter,
+    HeaderSwitch,
+    /// Action button slot (0-2) on the Modal form's pinned right-panel button row.
+    FsActionBtn(u8),
+    FsTimeline,
+    FsTimelineRow(usize),
+    FsInspectBack,
+    FsInspectScroll,
+    FsInspectActionBtn(u8),
+    FsToast,
+    FsPromptSubmit,
+    FsPromptCancel,
+}
+
+/// A transient notification shown in the lower-right corner of the active panel.
+/// Expires automatically after ~1.5 s (90 ticks at 60 fps).
+#[derive(Debug, Clone)]
+pub struct AppToast {
+    pub message: String,
+    pub expires_tick: u64,
 }
 
 pub struct App {
@@ -531,6 +624,24 @@ pub struct App {
     pub mobile_col_focus: MobileColFocus,
     /// Pending close confirmation modal state (mobile SPACES view).
     pub mobile_close_confirm: Option<MobileCloseConfirm>,
+    /// Last panel form used (Sidebar or Modal). Controls which form opens on next toggle.
+    pub last_panel_form: PanelForm,
+    /// Left agent-list scroll offset (in agents) for the Modal form.
+    pub fs_left_scroll: usize,
+    /// Right timeline scroll offset (in rows) for the Modal form.
+    pub fs_right_scroll: usize,
+    /// One-per-session toast gate for the "agent detected" hint (replaces auto-open).
+    pub agent_fleet_toast_shown: bool,
+    /// Preferred rendering mode for the Agent Monitor panel.
+    /// Overridden to Compact automatically when panel inner width <= 30.
+    pub agent_monitor_mode: AgentMonitorMode,
+    /// Transient notification displayed in the lower-right corner of the active panel.
+    pub toast: Option<AppToast>,
+    /// Full-detail overlay for a single ToolCall (opened via Enter on a timeline row).
+    pub inspect_overlay: Option<InspectOverlayState>,
+    /// OSC 52 clipboard payload to emit after the next terminal.draw().
+    /// Set by copy actions; drained in the main event loop.
+    pub pending_osc52: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -710,6 +821,14 @@ impl App {
             mobile_tabs_cursor: 0,
             mobile_col_focus: MobileColFocus::Left,
             mobile_close_confirm: None,
+            last_panel_form: PanelForm::Sidebar,
+            fs_left_scroll: 0,
+            fs_right_scroll: 0,
+            agent_fleet_toast_shown: false,
+            agent_monitor_mode: AgentMonitorMode::Card,
+            toast: None,
+            inspect_overlay: None,
+            pending_osc52: None,
         }
     }
 
@@ -753,6 +872,102 @@ impl App {
                 AgentStatus::Working | AgentStatus::Blocked | AgentStatus::Error
             )
         })
+    }
+
+    /// Returns the rendering mode actually used for the Agent Monitor given the current
+    /// panel inner width. When `panel_width` <= 30, always returns Compact regardless of
+    /// the stored user preference (narrow panels cannot fit card format).
+    pub fn effective_monitor_mode(&self, panel_width: u16) -> AgentMonitorMode {
+        if panel_width <= 30 {
+            AgentMonitorMode::Compact
+        } else {
+            self.agent_monitor_mode
+        }
+    }
+
+    pub fn update(&mut self, action: Action) {
+        match action {
+            Action::Noop => {}
+            Action::ToggleAgentMonitorMode => {
+                self.agent_monitor_mode = match self.agent_monitor_mode {
+                    AgentMonitorMode::Card => AgentMonitorMode::Compact,
+                    AgentMonitorMode::Compact => AgentMonitorMode::Card,
+                };
+                self.needs_redraw = true;
+            }
+            Action::ToggleAgentPanel => {
+                if self.agent_panel_mode.is_visible() {
+                    self.agent_panel_mode = AgentPanelMode::Hidden;
+                    if matches!(self.mode, InputMode::AgentPanel { .. }) {
+                        self.mode = InputMode::Normal;
+                    }
+                    if matches!(self.mode, InputMode::AgentFullScreen { .. }) {
+                        self.mode = InputMode::Normal;
+                    }
+                } else {
+                    self.agent_panel_mode = AgentPanelMode::Sidebar;
+                    if !matches!(self.mode, InputMode::AgentPanel { .. } | InputMode::AgentFullScreen { .. })
+                    {
+                        self.mode = InputMode::AgentPanel { selected: 0 };
+                    }
+                }
+                self.needs_redraw = true;
+            }
+            Action::CycleAgentPanelForm => {
+                match self.last_panel_form {
+                    PanelForm::Sidebar => {
+                        self.last_panel_form = PanelForm::Modal;
+                        if !matches!(self.mode, InputMode::AgentFullScreen { .. }) {
+                            self.mode = InputMode::AgentFullScreen {
+                                left_selected: 0,
+                                right_selected: 0,
+                                focus_right: false,
+                            };
+                        }
+                    }
+                    PanelForm::Modal => {
+                        self.last_panel_form = PanelForm::Sidebar;
+                        if matches!(self.mode, InputMode::AgentFullScreen { .. }) {
+                            self.mode = InputMode::AgentPanel { selected: 0 };
+                        }
+                    }
+                }
+                self.needs_redraw = true;
+            }
+            Action::Tick => {
+                self.tick_count += 1;
+                if let Some(toast) = &self.toast {
+                    if self.tick_count >= toast.expires_tick {
+                        self.toast = None;
+                        self.needs_redraw = true;
+                    }
+                }
+            }
+            Action::StartPromptInput(agent_id) => {
+                self.mode = InputMode::PromptInput {
+                    agent_id,
+                    input: String::new(),
+                };
+                self.needs_redraw = true;
+            }
+            Action::OpenInspectOverlay(tool_call) => {
+                self.inspect_overlay = Some(InspectOverlayState {
+                    tool_call,
+                    scroll: 0,
+                });
+                self.needs_redraw = true;
+            }
+            Action::CloseInspectOverlay => {
+                self.inspect_overlay = None;
+                self.needs_redraw = true;
+            }
+            Action::ClosePromptInput => {
+                if matches!(self.mode, InputMode::PromptInput { .. }) {
+                    self.mode = InputMode::Normal;
+                    self.needs_redraw = true;
+                }
+            }
+        }
     }
 
     pub fn pane_tree(&self) -> &PaneLayout {
@@ -1246,6 +1461,9 @@ pub mod tests {
                 progress: Some(0.4),
                 duration_s: 60,
                 acp: None,
+                context_percent: None,
+                compaction_count: 0,
+                agent_cli: String::new(),
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
             launch_cmd: None,
@@ -1294,6 +1512,9 @@ pub mod tests {
                 progress: None,
                 duration_s: 0,
                 acp: None,
+                context_percent: None,
+                compaction_count: 0,
+                agent_cli: String::new(),
             }),
             protocol: orbt_protocol::AgentProtocol::Heuristic,
             launch_cmd: None,
@@ -1633,15 +1854,16 @@ pub mod tests {
         let settings = UserSettings {
             theme: "orange".to_string(),
             sidebar_visible: false,
-            agent_panel_mode: AgentPanelMode::Modal,
+            agent_panel_mode: AgentPanelMode::Sidebar,
             agent_panel_visible: false,
             agent_fleet_enabled: false,
+            agent_last_form: PanelForm::Sidebar,
         };
         let toml_str = toml::to_string(&settings).unwrap();
         let restored: UserSettings = toml::from_str(&toml_str).unwrap();
         assert_eq!(restored.theme, "orange");
         assert!(!restored.sidebar_visible);
-        assert_eq!(restored.agent_panel_mode, AgentPanelMode::Modal);
+        assert_eq!(restored.agent_panel_mode, AgentPanelMode::Sidebar);
     }
 
     #[test]

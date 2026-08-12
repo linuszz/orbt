@@ -9,7 +9,12 @@ use ratatui::{
 use crate::app::{App, InputMode, COMMANDS};
 use crate::tui::theme::*;
 
-const FLEET_COMMAND_IDS: &[&str] = &["toggle_agent", "agent_scroll_up", "agent_scroll_down"];
+const FLEET_COMMAND_IDS: &[&str] = &[
+    "toggle_agent",
+    "agent_panel_switch",
+    "agent_scroll_up",
+    "agent_scroll_down",
+];
 
 fn filter_indices(search: &str, fleet_enabled: bool) -> Vec<usize> {
     let s = search.to_lowercase();

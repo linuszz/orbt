@@ -14,6 +14,9 @@ pub struct Capabilities {
     pub image_transfer: bool,
     pub file_transfer: bool,
     pub mcp_bridge: bool,
+    /// Daemon populates context_percent, compaction_count, agent_cli, turn_count on AgentDetail/AcpDetail.
+    #[serde(default)]
+    pub agent_context_stats: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

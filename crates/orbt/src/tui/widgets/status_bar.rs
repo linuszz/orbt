@@ -35,6 +35,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 .bg(accent_idle())
                 .add_modifier(Modifier::BOLD),
         ));
+        spans.push(Span::styled(
+            " scroll mode — history not available ",
+            Style::default().fg(fg_muted()),
+        ));
         spans.push(Span::styled(" | ", Style::default().fg(border())));
     }
 
@@ -47,7 +51,37 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
                 .add_modifier(Modifier::BOLD),
         ));
         spans.push(Span::styled(
-            " \u{2191}\u{2193}:nav Enter:view r:respond/rstr s:stop d:dismiss q:exit",
+            " \u{2191}\u{2193}:nav Enter:focus s:form S:stop m:density Esc:return ",
+            Style::default().fg(fg_muted()),
+        ));
+        spans.push(Span::styled(" | ", Style::default().fg(border())));
+    }
+
+    if app.agent_fleet_enabled && matches!(app.mode, InputMode::AgentFullScreen { .. }) {
+        spans.push(Span::styled(
+            " AGENT MODAL ",
+            Style::default()
+                .fg(bg_primary())
+                .bg(accent())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " Tab:panels j/k:nav y:copy Enter:inspect s:sidebar Esc:close ",
+            Style::default().fg(fg_muted()),
+        ));
+        spans.push(Span::styled(" | ", Style::default().fg(border())));
+    }
+
+    if matches!(app.mode, InputMode::PromptInput { .. }) {
+        spans.push(Span::styled(
+            " PROMPT ",
+            Style::default()
+                .fg(bg_primary())
+                .bg(accent_idle())
+                .add_modifier(Modifier::BOLD),
+        ));
+        spans.push(Span::styled(
+            " Enter:send Esc:cancel ",
             Style::default().fg(fg_muted()),
         ));
         spans.push(Span::styled(" | ", Style::default().fg(border())));
@@ -98,30 +132,30 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
         let (icon, label, color) = if n_blocked > 0 {
             let s = if n_blocked == 1 {
-                "eclipse".to_string()
+                "blocked".to_string()
             } else {
-                format!("{n_blocked} eclipse")
+                format!("{n_blocked} blocked")
             };
             ("\u{25CE}", s, blocked_pulse_color(app.tick_count))
         } else if n_error > 0 {
             let s = if n_error == 1 {
-                "debris".to_string()
+                "error".to_string()
             } else {
-                format!("{n_error} debris")
+                format!("{n_error} error")
             };
             ("\u{25C9}", s, accent_error())
         } else if n_working > 0 {
             let s = if n_working == 1 {
-                "transmitting".to_string()
+                "working".to_string()
             } else {
-                format!("{n_working} transmitting")
+                format!("{n_working} working")
             };
             ("\u{25CF}", s, working_pulse_color(app.tick_count))
         } else if n_idle > 0 {
             let s = if n_idle == 1 {
-                "standby".to_string()
+                "idle".to_string()
             } else {
-                format!("{n_idle} standby")
+                format!("{n_idle} idle")
             };
             ("\u{25CB}", s, accent_idle())
         } else {
