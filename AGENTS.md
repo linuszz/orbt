@@ -1,14 +1,21 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-07-28
-**Commit:** 7ed567b (v0.1.11)
+**Generated:** 2026-08-12
+**Commit:** c020471
 **Branch:** main
 
-Public release: **v0.1.11** (2026-07-28). Development HEAD is at this release.
+Public release: **v0.1.11** (2026-07-28). Development HEAD is ahead of this release (agent monitor v2 merged, ghostty removed).
+
+## AGENT INSTRUCTIONS
+
+- All thinking, reasoning, and output must be in **Chinese or English only**. No other languages.
+- The language of this file is English (technical reference). Agent responses to the user follow user preference (currently Chinese).
 
 ## OVERVIEW
 
 Terminal workspace multiplexer (tmux heritage) + first-class agent runtime. Rust workspace: 4 crates (`orbt` unified binary, `orbt-protocol` IPC, `orbt-core` VT emulation, `orbit-alias` crates.io placeholder). Phase 1 (Mercury) + Phase 2 (Venus agent runtime) in progress.
+
+**VT emulation**: uses `orbt-core::VtParser` (pure Rust). The `orbt-ghostty` crate was introduced and then removed — do NOT re-introduce it. The ghostty FFI path caused a 10-second freeze on terminal entry due to event-loop starvation from blocking FFI calls in async context.
 
 ## STRUCTURE
 
@@ -49,7 +56,7 @@ orbit/
 |------|----------|-------|
 | IPC types/contract | `orbt-protocol/src/messages.rs` | Wire contract -- source of truth (41 variants: 25 ClientMessage + 16 ServerEvent) |
 | Protocol encode/decode | `orbt-protocol/src/encoding.rs` | bincode 2.x serde helpers |
-| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 3274 lines |
+| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 3347 lines |
 | Server session/PTY | `orbt/src/daemon/session.rs` / `pty.rs` | Tab management, PTY spawn |
 | **Agent runtime** | `orbt/src/daemon/agent.rs` | Detection, Eclipse, metrics -- `AgentRegistry` |
 | Client IPC writer | `orbt/src/ipc.rs` | Background channel -- socket task |
@@ -71,6 +78,9 @@ orbit/
 | `AgentRegistry::watch_pane()` | fn | `orbt/src/daemon/agent.rs` | Per-pane async task: /proc scan + PTY scan |
 | `EclipseModalState` | struct | `orbt/src/app.rs` | Blocked agent intervention modal state |
 | `LaunchModalState` | struct | `orbt/src/app.rs` | Agent launcher picker state |
+| `AgentMonitorMode` | enum | `orbt/src/app.rs` | Card / Compact row mode for agent panel |
+| `InspectOverlayState` | struct | `orbt/src/app.rs` | Timeline tool-call inspect overlay state |
+| `AppToast` | struct | `orbt/src/app.rs` | Ephemeral toast notification state |
 
 ## CONVENTIONS
 
@@ -86,6 +96,7 @@ orbit/
 - **Animation**: Lerp-based pulse (Working=slow, Blocked=fast amber, Error=red blink)
 - **Agent sort**: Blocked-first, then Working, then others; stable on updates
 - **Agent Fleet default**: Hidden behind `agent_fleet_enabled` config flag (default off in v0.1.11+); enable in settings.toml or via Ctrl+B a
+
 
 ## ANTI-PATTERNS (THIS PROJECT)
 
@@ -140,7 +151,7 @@ just qa                          # fmt-check + clippy + test
 - Agent names matched: `claude`, `codex`, `aider`, `gh-copilot`, `cursor`, `opencode` (+ script runners `node`/`npx`/`python`)
 - **ACP protocol detection**: agents exposing ACP (Agent Client Protocol) get [ACP] badge + detail modal with tool-call tracking
 - PTY output is ANSI-stripped before display in agent fields (`strip_ansi`)
-- `events.rs` is the largest file (3274 lines) -- all key/mouse dispatch lives here
+- `events.rs` is the largest file (3347 lines) -- all key/mouse dispatch lives here
 - Settings persisted to `~/.config/orbt/settings.toml`
 
 ## RELEASE MANAGEMENT
