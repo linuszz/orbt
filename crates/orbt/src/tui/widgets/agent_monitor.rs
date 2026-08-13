@@ -1853,23 +1853,6 @@ pub fn fs_modal_layout(screen: Rect, any_blocked: bool) -> FsModalLayout {
 }
 
 pub fn render_fullscreen_modal(frame: &mut Frame, screen: Rect, app: &App) {
-    if screen.width < 80 || screen.height < 24 {
-        let msg = "Terminal too small for Agent Modal (need 80x24)";
-        let w = (msg.len() as u16 + 4).min(screen.width);
-        let area = Rect {
-            x: screen.x + screen.width.saturating_sub(w) / 2,
-            y: screen.y + screen.height / 2,
-            width: w,
-            height: 3,
-        };
-        frame.render_widget(Clear, area);
-        frame.render_widget(
-            Paragraph::new(msg).block(Block::default().borders(Borders::ALL)),
-            area,
-        );
-        return;
-    }
-
     let any_blocked = app.agents.iter().any(|a| a.status == AgentStatus::Blocked);
     let layout = fs_modal_layout(screen, any_blocked);
     let area = layout.area;

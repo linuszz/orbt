@@ -323,7 +323,7 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
         MobileView::Agents => {
             if app.agent_fleet_enabled {
                 frame.render_widget(Clear, content_area);
-                widgets::agent_monitor::render(frame, content_area, app);
+                widgets::agent_monitor::render_fullscreen_modal(frame, content_area, app);
                 if app.eclipse_modal.is_some() {
                     widgets::eclipse_modal::render(frame, content_area, app);
                 }

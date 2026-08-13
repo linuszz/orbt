@@ -569,6 +569,12 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                 selected: 0,
                 search_focused: false,
             };
+        } else if app.mobile_view == MobileView::Agents {
+            app.mode = InputMode::AgentFullScreen {
+                left_selected: 0,
+                right_selected: 0,
+                focus_right: false,
+            };
         } else {
             app.mode = InputMode::Normal;
         }
@@ -595,33 +601,7 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
             false
         }
         MobileView::Agents => {
-            // Mirror AgentPanel mode key handling.
-            let n = app.agents.len();
             match key.code {
-                KeyCode::Up | KeyCode::Char('k') => {
-                    if n > 0 {
-                        let sel = if let InputMode::AgentPanel { selected } = app.mode {
-                            selected.saturating_sub(1)
-                        } else {
-                            0
-                        };
-                        app.mode = InputMode::AgentPanel { selected: sel };
-                    }
-                    app.needs_redraw = true;
-                    true
-                }
-                KeyCode::Down | KeyCode::Char('j') => {
-                    if n > 0 {
-                        let sel = if let InputMode::AgentPanel { selected } = app.mode {
-                            (selected + 1).min(n - 1)
-                        } else {
-                            0
-                        };
-                        app.mode = InputMode::AgentPanel { selected: sel };
-                    }
-                    app.needs_redraw = true;
-                    true
-                }
                 KeyCode::Char('n') => {
                     orbt_tui::tui::widgets::launch_modal::open(app);
                     true
@@ -1814,6 +1794,12 @@ async fn handle_mobile_mouse(
                         search: String::new(),
                         selected: 0,
                         search_focused: false,
+                    };
+                } else if view == MobileView::Agents {
+                    app.mode = InputMode::AgentFullScreen {
+                        left_selected: 0,
+                        right_selected: 0,
+                        focus_right: false,
                     };
                 } else {
                     app.mode = InputMode::Normal;
