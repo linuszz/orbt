@@ -187,9 +187,103 @@ impl AgentRegistry {
             .cloned()
     }
 
-    /// Start a background task that polls for agent child processes of `shell_pid`
-    /// and scans PTY output for block patterns (Satellite Eclipse detection).
-    /// On non-Linux, process detection is skipped (no /proc); block scanning still runs.
+    #[cfg(target_os = "linux")]
+    pub fn spawn_global_scanner(self: Arc<Self>, space_id: SpaceId) {
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(Duration::from_millis(2000));
+            loop {
+                interval.tick().await;
+
+                let known_pids: HashSet<u32> = {
+                    let map = self.pid_map.read().await;
+                    map.values().copied().collect()
+                };
+
+                let Ok(entries) = std::fs::read_dir("/proc") else {
+                    continue;
+                };
+
+                for entry in entries.flatten() {
+                    let name = entry.file_name();
+                    let name_str = name.to_string_lossy();
+                    let Ok(pid) = name_str.parse::<u32>() else {
+                        continue;
+                    };
+                    if known_pids.contains(&pid) {
+                        continue;
+                    }
+                    let cmdline = read_cmdline(pid);
+                    let Some(name) = agent_name_from_cmdline(cmdline.as_deref()) else {
+                        continue;
+                    };
+                    let id = AgentId(self.next_id.fetch_add(1, Ordering::Relaxed));
+                    let model = extract_model_from_cmdline(pid, cmdline.as_deref());
+                    let task = extract_task_from_cmdline(cmdline.as_deref());
+                    let agent_cli = extract_agent_cli(&name);
+                    let protocol = if ACP_CAPABLE_AGENTS.contains(&name.as_str()) {
+                        AgentProtocol::AcpCapable
+                    } else {
+                        AgentProtocol::Heuristic
+                    };
+                    let info = AgentInfo {
+                        id,
+                        name,
+                        space_id,
+                        pane_id: None,
+                        model,
+                        status: AgentStatus::Working,
+                        detail: Some(AgentDetail {
+                            task,
+                            agent_cli,
+                            context_percent: None,
+                            compaction_count: 0,
+                            ..Default::default()
+                        }),
+                        protocol,
+                        launch_cmd: None,
+                    };
+                    self.pid_map.write().await.insert(id, pid);
+                    self.agents.write().await.push(info.clone());
+                    let _ = self.event_bus.send(ServerEvent::AgentCreated(info));
+                    debug!("global scan: agent detected pid={pid} id={id:?}");
+                }
+
+                let globally_tracked: Vec<(AgentId, u32)> = {
+                    let agents = self.agents.read().await;
+                    let map = self.pid_map.read().await;
+                    agents
+                        .iter()
+                        .filter(|a| a.pane_id.is_none())
+                        .filter_map(|a| map.get(&a.id).map(|&pid| (a.id, pid)))
+                        .collect()
+                };
+                for (agent_id, pid) in globally_tracked {
+                    if !process_exists(pid) {
+                        {
+                            let mut agents = self.agents.write().await;
+                            if let Some(a) = agents.iter_mut().find(|a| a.id == agent_id) {
+                                a.status = AgentStatus::Done;
+                            }
+                        }
+                        self.pid_map.write().await.remove(&agent_id);
+                        let _ = self.event_bus.send(ServerEvent::AgentStatusChanged {
+                            agent_id,
+                            new_status: AgentStatus::Done,
+                            detail: None,
+                        });
+                        let registry = Arc::clone(&self);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            registry.agents.write().await.retain(|a| a.id != agent_id);
+                            let _ = registry.event_bus.send(ServerEvent::AgentRemoved(agent_id));
+                        });
+                    }
+                }
+            }
+        });
+    }
+
     pub fn watch_pane(self: Arc<Self>, pane_id: PaneId, space_id: SpaceId, shell_pid: u32) {
         tokio::spawn(async move {
             // On non-Linux, process scanning is unavailable.
@@ -360,7 +454,7 @@ impl AgentRegistry {
 
                         #[cfg(target_os = "linux")]
                         {
-                            let children = child_processes(shell_pid);
+                            let children = descendant_processes(shell_pid);
                             let child_set: HashSet<u32> = children.iter().copied().collect();
 
                             // Detect newly appeared agents.
@@ -705,7 +799,6 @@ fn read_cpu_ticks(pid: u32) -> Option<u64> {
 /// Returns the immediate child PIDs of `parent_pid`.
 #[cfg(target_os = "linux")]
 fn child_processes(parent_pid: u32) -> Vec<u32> {
-    // Fast path: kernel exposes direct children in /proc/<pid>/task/<pid>/children.
     let children_path = format!("/proc/{parent_pid}/task/{parent_pid}/children");
     if let Ok(content) = std::fs::read_to_string(&children_path) {
         let pids: Vec<u32> = content
@@ -717,7 +810,6 @@ fn child_processes(parent_pid: u32) -> Vec<u32> {
         }
     }
 
-    // Fallback: scan every /proc/<n>/status for PPid matching parent_pid.
     let mut result = Vec::new();
     let Ok(entries) = std::fs::read_dir("/proc") else {
         return result;
@@ -746,6 +838,18 @@ fn child_processes(parent_pid: u32) -> Vec<u32> {
         }
     }
     result
+}
+
+#[cfg(target_os = "linux")]
+fn descendant_processes(root_pid: u32) -> Vec<u32> {
+    let mut all = Vec::new();
+    let mut queue = vec![root_pid];
+    while let Some(pid) = queue.pop() {
+        let children = child_processes(pid);
+        queue.extend_from_slice(&children);
+        all.extend_from_slice(&children);
+    }
+    all
 }
 
 #[cfg(target_os = "linux")]

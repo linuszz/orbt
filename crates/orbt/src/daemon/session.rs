@@ -979,6 +979,9 @@ impl SpaceManager {
         );
         Arc::clone(&session).spawn_scrollback_collector();
 
+        #[cfg(target_os = "linux")]
+        Arc::clone(&agent_registry).spawn_global_scanner(space_id);
+
         let mut spaces = HashMap::new();
         spaces.insert(space_id, session);
 
@@ -1004,6 +1007,8 @@ impl SpaceManager {
         cwd: String,
     ) -> Self {
         let agent_registry = AgentRegistry::new(event_bus.clone());
+        #[cfg(target_os = "linux")]
+        Arc::clone(&agent_registry).spawn_global_scanner(SpaceId(0));
         Self {
             spaces: RwLock::new(HashMap::new()),
             space_order: RwLock::new(Vec::new()),
