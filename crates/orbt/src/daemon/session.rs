@@ -37,7 +37,7 @@ fn proc_cwd(_pid: u32, fallback: &str) -> String {
 use anyhow::Context;
 use orbt_protocol::{
     CellGrid, FullState, PaneId, PaneInfo, PaneLayout, ServerEvent, SpaceId, SpaceInfo, SplitDir,
-    TabId, TabInfo,
+    TabId, TabInfo, TabLayout,
 };
 use portable_pty::PtySize;
 use tokio::sync::{broadcast, mpsc, RwLock};
@@ -344,7 +344,7 @@ impl SessionState {
             .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
     }
 
-    pub async fn new_tab(&self, name: Option<String>) -> anyhow::Result<TabId> {
+    pub async fn new_tab(&self, name: Option<String>, layout: TabLayout) -> anyhow::Result<TabId> {
         let new_id = TabId(self.next_tab_id.fetch_add(1, Ordering::Relaxed));
         let tab_count = self.tab_order.read().await.len();
         let name = name.unwrap_or_else(|| format!("tab{}", tab_count));
@@ -389,7 +389,13 @@ impl SessionState {
                 new_id,
                 TabState {
                     name,
-                    layout: PaneLayout::Leaf(pane_id),
+                    layout: match layout {
+                        TabLayout::Bsp => PaneLayout::Leaf(pane_id),
+                        TabLayout::Strip => PaneLayout::Strip {
+                            panes: vec![pane_id],
+                            column_width: 80,
+                        },
+                    },
                     active_pane: pane_id,
                 },
             );

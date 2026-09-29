@@ -63,6 +63,10 @@ pub enum ClientMessage {
 
     NewTab {
         name: Option<String>,
+        /// Layout the new tab starts in. Defaults to the binary split tree when
+        /// absent, so an older client talking to a newer daemon still works.
+        #[serde(default)]
+        layout: crate::TabLayout,
     },
     CloseTab {
         tab_id: crate::TabId,

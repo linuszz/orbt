@@ -143,7 +143,12 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
             app.mode = InputMode::Scroll { offset: 1 };
         }
         "new_tab" => {
-            let _ = writer.send(ClientMessage::NewTab { name: None }).await;
+            let _ = writer
+                .send(ClientMessage::NewTab {
+                    name: None,
+                    layout: orbt_protocol::TabLayout::from(app.layout_mode),
+                })
+                .await;
         }
         "next_tab" => {
             app.next_tab();
@@ -276,7 +281,12 @@ async fn execute_context_action(
 ) {
     match id {
         "new_tab" => {
-            let _ = writer.send(ClientMessage::NewTab { name: None }).await;
+            let _ = writer
+                .send(ClientMessage::NewTab {
+                    name: None,
+                    layout: orbt_protocol::TabLayout::from(app.layout_mode),
+                })
+                .await;
         }
         "close_tab" => {
             if let ContextMenuTarget::Tab(tab_id) = target {
@@ -687,7 +697,12 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
                                 app.mobile_view = MobileView::Terminal;
                             } else {
                                 // "+ New Tab" button
-                                let _ = writer.send(ClientMessage::NewTab { name: None }).await;
+                                let _ = writer
+                                    .send(ClientMessage::NewTab {
+                                        name: None,
+                                        layout: orbt_protocol::TabLayout::from(app.layout_mode),
+                                    })
+                                    .await;
                             }
                         }
                     }
@@ -2197,7 +2212,12 @@ async fn handle_mobile_mouse(
                                     }
                                 }
                                 SpacesHit::NewTab => {
-                                    let _ = writer.send(ClientMessage::NewTab { name: None }).await;
+                                    let _ = writer
+                                        .send(ClientMessage::NewTab {
+                                            name: None,
+                                            layout: orbt_protocol::TabLayout::from(app.layout_mode),
+                                        })
+                                        .await;
                                 }
                                 SpacesHit::None => {}
                             }
@@ -2516,7 +2536,12 @@ async fn handle_mouse(
                         x += label_len;
                     }
                     if mouse.column >= x && mouse.column < x + 3 {
-                        let _ = writer.send(ClientMessage::NewTab { name: None }).await;
+                        let _ = writer
+                            .send(ClientMessage::NewTab {
+                                name: None,
+                                layout: orbt_protocol::TabLayout::from(app.layout_mode),
+                            })
+                            .await;
                         app.needs_redraw = true;
                         return;
                     }

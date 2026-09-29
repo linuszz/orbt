@@ -83,6 +83,27 @@ pub enum AgentPanelMode {
     Hidden,
 }
 
+/// Pane arrangement strategy. `Bsp` is the tmux-style binary split tree where
+/// opening a pane subdivides an existing one. `Strip` is the niri-style
+/// scrollable band where opening a pane appends to the side and leaves every
+/// existing pane at its current size.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum LayoutMode {
+    #[default]
+    Bsp,
+    Strip,
+}
+
+impl From<LayoutMode> for orbt_protocol::TabLayout {
+    fn from(m: LayoutMode) -> Self {
+        match m {
+            LayoutMode::Bsp => Self::Bsp,
+            LayoutMode::Strip => Self::Strip,
+        }
+    }
+}
+
 impl AgentPanelMode {
     /// Toggle: Hidden ↔ Sidebar.
     pub fn cycle(self) -> Self {
@@ -136,6 +157,8 @@ pub struct UserSettings {
     pub agent_fleet_enabled: bool,
     #[serde(default)]
     pub agent_last_form: PanelForm,
+    #[serde(default)]
+    pub layout_mode: LayoutMode,
 }
 
 impl Default for UserSettings {
@@ -147,6 +170,7 @@ impl Default for UserSettings {
             agent_panel_visible: false,
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
+            layout_mode: LayoutMode::Bsp,
         }
     }
 }
@@ -183,6 +207,7 @@ pub fn save_settings(app: &App) {
         agent_panel_visible: false,
         agent_fleet_enabled: app.agent_fleet_enabled,
         agent_last_form: app.last_panel_form,
+        layout_mode: app.layout_mode,
     };
     let path = settings_path();
     if let Some(parent) = path.parent() {
@@ -610,6 +635,8 @@ pub struct App {
     pub theme_name: String,
     /// Runtime copy of `UserSettings::agent_fleet_enabled`. Set at startup, fixed for the session.
     pub agent_fleet_enabled: bool,
+    /// Runtime copy of `UserSettings::layout_mode`. Applies to newly created tabs.
+    pub layout_mode: LayoutMode,
     pub settings_open: bool,
     pub settings_selected: usize,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
@@ -816,6 +843,7 @@ impl App {
             zoomed_pane: None,
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,
+            layout_mode: LayoutMode::Bsp,
             settings_open: false,
             settings_selected: 0,
             pending_payload_path: None,
@@ -1934,6 +1962,7 @@ pub mod tests {
             agent_panel_visible: false,
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
+            layout_mode: LayoutMode::Bsp,
         };
         let toml_str = toml::to_string(&settings).unwrap();
         let restored: UserSettings = toml::from_str(&toml_str).unwrap();

@@ -239,18 +239,39 @@ pub enum PaneLayout {
         #[serde(default = "default_ratio")]
         ratio: f32,
     },
+    /// Scrollable strip: panes side by side on an unbounded horizontal band.
+    /// Opening a pane appends without resizing the others; the viewport scrolls
+    /// to keep the focused pane visible.
+    Strip {
+        panes: Vec<PaneId>,
+        #[serde(default = "default_strip_column_width")]
+        column_width: u16,
+    },
 }
 
 fn default_ratio() -> f32 {
     0.5
 }
 
+fn default_strip_column_width() -> u16 {
+    80
+}
+
+/// Which layout a newly created tab starts in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TabLayout {
+    #[default]
+    Bsp,
+    Strip,
+}
+
 impl PaneLayout {
-    pub fn split_leaf(&mut self, target: PaneId, direction: SplitDir, new_id: PaneId) -> bool {
+    pub fn split_leaf(&mut self, target: PaneId, _direction: SplitDir, new_id: PaneId) -> bool {
         match self {
             PaneLayout::Leaf(id) if *id == target => {
                 *self = PaneLayout::Split {
-                    direction,
+                    direction: _direction,
                     first: Box::new(PaneLayout::Leaf(target)),
                     second: Box::new(PaneLayout::Leaf(new_id)),
                     ratio: 0.5,
@@ -259,8 +280,15 @@ impl PaneLayout {
             }
             PaneLayout::Leaf(_) => false,
             PaneLayout::Split { first, second, .. } => {
-                first.split_leaf(target, direction, new_id)
-                    || second.split_leaf(target, direction, new_id)
+                first.split_leaf(target, _direction, new_id)
+                    || second.split_leaf(target, _direction, new_id)
+            }
+            PaneLayout::Strip { panes, .. } => {
+                if !panes.contains(&target) {
+                    return false;
+                }
+                panes.push(new_id);
+                true
             }
         }
     }
@@ -288,6 +316,22 @@ impl PaneLayout {
                 first.set_split_ratio(first_pane, second_pane, ratio)
                     || second.set_split_ratio(first_pane, second_pane, ratio)
             }
+            PaneLayout::Strip {
+                panes,
+                column_width,
+            } => {
+                let adjacent = panes
+                    .iter()
+                    .position(|&p| p == first_pane)
+                    .is_some_and(|i| panes.get(i + 1) == Some(&second_pane));
+                if !adjacent {
+                    return false;
+                }
+                // Every pane in a strip shares one width, so dragging the shared
+                // edge just rescales the whole column.
+                *column_width = ((*column_width as f32 * ratio) as u16).clamp(20, 400);
+                true
+            }
         }
     }
 
@@ -311,6 +355,15 @@ impl PaneLayout {
                 second.remove_leaf(target);
                 true
             }
+            PaneLayout::Strip { panes, .. } => {
+                if let Some(idx) = panes.iter().position(|&p| p == target) {
+                    panes.remove(idx);
+                }
+                if panes.len() == 1 {
+                    *self = PaneLayout::Leaf(panes[0]);
+                }
+                true
+            }
         }
     }
 
@@ -322,6 +375,7 @@ impl PaneLayout {
                 v.extend(second.leaves());
                 v
             }
+            PaneLayout::Strip { panes, .. } => panes.clone(),
         }
     }
 
@@ -351,6 +405,38 @@ impl PaneLayout {
                         .or_else(|| second.find_pane_in_direction(current, split_dir, positive))
                 }
             }
+            PaneLayout::Strip { panes, .. } => {
+                if split_dir != SplitDir::Horizontal {
+                    return None;
+                }
+                let idx = panes.iter().position(|&p| p == current)?;
+                let next = if positive {
+                    idx + 1
+                } else {
+                    idx.checked_sub(1)?
+                };
+                panes.get(next).copied()
+            }
+        }
+    }
+
+    pub fn as_strip(&self) -> Option<(&[PaneId], u16)> {
+        match self {
+            PaneLayout::Strip {
+                panes,
+                column_width,
+            } => Some((panes, *column_width)),
+            _ => None,
+        }
+    }
+
+    pub fn set_column_width(&mut self, width: u16) -> bool {
+        match self {
+            PaneLayout::Strip { column_width, .. } => {
+                *column_width = width.clamp(20, 400);
+                true
+            }
+            _ => false,
         }
     }
 }

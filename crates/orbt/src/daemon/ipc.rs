@@ -105,9 +105,9 @@ where
                         let session = space_manager.active_session().await;
                         session.focus_pane(tab_id, pane_id).await;
                     }
-                    ClientMessage::NewTab { name } => {
+                    ClientMessage::NewTab { name, layout } => {
                         let session = space_manager.active_session().await;
-                        if let Err(e) = session.new_tab(name).await {
+                        if let Err(e) = session.new_tab(name, layout).await {
                             tracing::warn!("new_tab: {e:#}");
                         }
                     }

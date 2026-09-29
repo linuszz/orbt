@@ -449,6 +449,59 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     );
 }
 
+/// Lay out a scrollable strip inside `area`.
+///
+/// Panes are placed left to right at `column_width` each. The viewport is
+/// scrolled so `focus` is fully visible; when the strip is narrower than the
+/// viewport it is pinned to the left edge. Panes scrolled past either edge get
+/// zero-width rects so callers can skip them.
+pub fn strip_areas(
+    panes: &[PaneId],
+    column_width: u16,
+    area: Rect,
+    focus: PaneId,
+) -> Vec<(PaneId, Rect)> {
+    if panes.is_empty() {
+        return Vec::new();
+    }
+    let width = column_width.max(1) as usize;
+    let total = width * panes.len();
+    let viewport = area.width as usize;
+
+    let focus_idx = panes.iter().position(|&p| p == focus).unwrap_or(0);
+    let focus_start = focus_idx * width;
+
+    // Scroll left edge so the focused pane sits inside the viewport.
+    let scroll = if total <= viewport {
+        0
+    } else {
+        focus_start
+            .saturating_sub(viewport.saturating_sub(width) / 2)
+            .min(total - viewport)
+    };
+
+    panes
+        .iter()
+        .enumerate()
+        .map(|(i, &pid)| {
+            let x = i * width;
+            let visible_start = x.max(scroll);
+            let visible_end = (x + width).min(scroll + viewport);
+            let rect_w = visible_end.saturating_sub(visible_start) as u16;
+            let rel = visible_start.saturating_sub(scroll) as u16;
+            (
+                pid,
+                Rect {
+                    x: area.x + rel,
+                    y: area.y,
+                    width: rect_w,
+                    height: area.height,
+                },
+            )
+        })
+        .collect()
+}
+
 pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> {
     match node {
         PaneLayout::Leaf(pid) => vec![(*pid, area)],
@@ -463,6 +516,15 @@ pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> 
             v.extend(compute_leaf_areas(second, second_area));
             v
         }
+        PaneLayout::Strip {
+            panes,
+            column_width,
+        } => strip_areas(
+            panes,
+            *column_width,
+            area,
+            panes.first().copied().unwrap_or(PaneId(0)),
+        ),
     }
 }
 
@@ -474,6 +536,29 @@ pub fn find_split_at_cursor(
 ) -> Option<(PaneId, PaneId, SplitDir)> {
     match node {
         PaneLayout::Leaf(_) => None,
+        PaneLayout::Strip {
+            panes,
+            column_width,
+        } => {
+            let focus = panes.first().copied().unwrap_or(PaneId(0));
+            let rects = strip_areas(panes, *column_width, area, focus);
+            for w in rects.windows(2) {
+                let (left_id, left) = w[0];
+                let (right_id, right) = w[1];
+                if right.width == 0 || left.width == 0 {
+                    continue;
+                }
+                let bx = right.x;
+                if row >= area.y
+                    && row < area.y + area.height
+                    && (bx == 0 || col + 1 >= bx)
+                    && col <= bx
+                {
+                    return Some((left_id, right_id, SplitDir::Horizontal));
+                }
+            }
+            None
+        }
         PaneLayout::Split {
             direction,
             first,
@@ -513,6 +598,16 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
     match node {
         PaneLayout::Leaf(pid) => {
             render_single_pane(frame, area, *pid, app);
+        }
+        PaneLayout::Strip {
+            panes,
+            column_width,
+        } => {
+            for (pid, rect) in strip_areas(panes, *column_width, area, app.active_pane) {
+                if rect.width > 0 {
+                    render_single_pane(frame, rect, pid, app);
+                }
+            }
         }
         PaneLayout::Split {
             direction,
@@ -1341,5 +1436,52 @@ mod tests {
         assert_eq!(areas[0].1.width, 10);
         assert_eq!(areas[1].0, PaneId(2));
         assert_eq!(areas[1].1.width, 10);
+    }
+
+    const STRIP: [PaneId; 4] = [PaneId(1), PaneId(2), PaneId(3), PaneId(4)];
+
+    #[test]
+    fn strip_fits_without_scrolling() {
+        let area = Rect::new(0, 0, 200, 10);
+        let areas = strip_areas(&STRIP, 40, area, PaneId(1));
+        assert_eq!(areas.len(), 4);
+        for (i, (_, r)) in areas.iter().enumerate() {
+            assert_eq!(r.x, i as u16 * 40, "pane {i} x");
+            assert_eq!(r.width, 40, "pane {i} keeps its width when the strip fits");
+        }
+    }
+
+    #[test]
+    fn strip_scrolls_to_keep_focus_visible() {
+        let area = Rect::new(0, 0, 100, 10);
+        let areas = strip_areas(&STRIP, 40, area, PaneId(4));
+        let last = areas[3].1;
+        assert!(
+            last.x < 100 && last.x + last.width <= 100,
+            "focused pane is on screen"
+        );
+        assert!(last.width > 0, "focused pane is not clipped away");
+        // Panes scrolled off the left edge collapse to zero width.
+        assert!(areas[0].1.width < 40, "earlier panes scroll off the left");
+    }
+
+    #[test]
+    fn strip_viewport_is_clamped_to_content_end() {
+        let area = Rect::new(0, 0, 100, 10);
+        // Total content is 160 cols; the view can never start past 60.
+        let areas = strip_areas(&STRIP, 40, area, PaneId(4));
+        let right_edge = areas[3].1.x + areas[3].1.width;
+        assert!(right_edge <= 100, "no gap at the right edge");
+    }
+
+    #[test]
+    fn strip_focus_stays_put_when_other_panes_close() {
+        let area = Rect::new(0, 0, 100, 10);
+        let before = strip_areas(&STRIP, 40, area, PaneId(3));
+        let after = strip_areas(&[PaneId(2), PaneId(3), PaneId(4)], 40, area, PaneId(3));
+        assert_eq!(
+            after[1].1.x, before[2].1.x,
+            "viewport scrolls to compensate, so the focused pane does not move on screen"
+        );
     }
 }
