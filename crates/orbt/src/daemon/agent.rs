@@ -190,8 +190,7 @@ impl AgentRegistry {
     #[cfg(target_os = "linux")]
     pub fn spawn_global_scanner(self: Arc<Self>, space_id: SpaceId) {
         tokio::spawn(async move {
-            let mut interval =
-                tokio::time::interval(Duration::from_millis(2000));
+            let mut interval = tokio::time::interval(Duration::from_millis(2000));
             loop {
                 interval.tick().await;
 

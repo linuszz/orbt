@@ -135,7 +135,8 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
                 .await;
         }
         "zoom_pane" => {
-            // Zoom is a placeholder — future: toggle pane fullscreen
+            app.toggle_zoom();
+            app.needs_resize = true;
         }
         "scroll_mode" => {
             app.selection = None;
@@ -601,21 +602,19 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
             // Fall through to normal key handler for PTY passthrough.
             false
         }
-        MobileView::Agents => {
-            match key.code {
-                KeyCode::Char('n') => {
-                    orbt_tui::tui::widgets::launch_modal::open(app);
-                    true
-                }
-                KeyCode::Esc | KeyCode::Char('q') => {
-                    app.mobile_view = MobileView::Terminal;
-                    app.mode = InputMode::Normal;
-                    app.needs_redraw = true;
-                    true
-                }
-                _ => false,
+        MobileView::Agents => match key.code {
+            KeyCode::Char('n') => {
+                orbt_tui::tui::widgets::launch_modal::open(app);
+                true
             }
-        }
+            KeyCode::Esc | KeyCode::Char('q') => {
+                app.mobile_view = MobileView::Terminal;
+                app.mode = InputMode::Normal;
+                app.needs_redraw = true;
+                true
+            }
+            _ => false,
+        },
         MobileView::Windows => {
             match key.code {
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -859,9 +858,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         }
                         let text = lines.join("\n");
                         app.queue_osc52_copy(&text);
-                        let _ = writer
-                            .send(ClientMessage::CopyToClipboard { text })
-                            .await;
+                        let _ = writer.send(ClientMessage::CopyToClipboard { text }).await;
                     }
                 }
                 app.needs_redraw = true;
@@ -1209,7 +1206,9 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                     if *focus_right {
                         *right_selected = right_selected.saturating_sub(1);
                     } else {
-                        *left_selected = left_selected.saturating_add(1).min(app.agents.len().saturating_sub(1));
+                        *left_selected = left_selected
+                            .saturating_add(1)
+                            .min(app.agents.len().saturating_sub(1));
                         *right_selected = 0;
                     }
                 }
@@ -1273,14 +1272,14 @@ fn resize_local_grids_for_areas(
 
 fn resize_local_grids(app: &mut App, term_cols: u16, term_rows: u16) {
     let pane_area = compute_pane_area(term_cols, term_rows, app);
-    let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
     resize_local_grids_for_areas(app, &areas);
 }
 
 async fn send_pane_resizes(app: &mut App, writer: &IpcWriter, term_cols: u16, term_rows: u16) {
     resize_local_grids(app, term_cols, term_rows);
     let pane_area = compute_pane_area(term_cols, term_rows, app);
-    let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
     for (pid, rect) in areas {
         let pc = rect.width.saturating_sub(2).max(1);
         let pr = rect.height.saturating_sub(2).max(1);
@@ -1871,7 +1870,7 @@ async fn handle_mobile_mouse(
                             height: nav_row.saturating_sub(1),
                         };
                         // Check for pane click — same logic as desktop but with mobile area.
-                        let leaves = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+                        let leaves = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
                                 && mouse.column < rect.x + rect.width
@@ -2844,17 +2843,19 @@ async fn handle_mouse(
             }
 
             let pane_area = content_area(term_size, app);
-            if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
-                app.pane_tree(),
-                pane_area,
-                mouse.column,
-                mouse.row,
-            ) {
-                app.drag_split = Some((first_pane, second_pane, dir, -1.0));
-                app.selection = None;
-                return;
+            if app.zoomed_pane.is_none() {
+                if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
+                    app.pane_tree(),
+                    pane_area,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    app.drag_split = Some((first_pane, second_pane, dir, -1.0));
+                    app.selection = None;
+                    return;
+                }
             }
-            let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+            let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
                     && mouse.column < rect.x + rect.width
@@ -2963,7 +2964,7 @@ async fn handle_mouse(
                     width: term_w.saturating_sub(sidebar_w + agent_w),
                     height: term_h.saturating_sub(3),
                 };
-                let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
                 let mut found_pane = None;
                 for (pid, rect) in &areas {
                     if mouse.column >= rect.x
@@ -3027,7 +3028,7 @@ async fn handle_mouse(
                     .is_some_and(|p| p.parser.grid.mouse_reporting);
                 if has_mouse {
                     let pane_area = content_area(term_size, app);
-                    let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+                    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
                     for (pid, rect) in &areas {
                         if *pid == app.active_pane
                             && mouse.column > rect.x
@@ -3058,7 +3059,7 @@ async fn handle_mouse(
                 .map(|s| s.pane_id);
             if let Some(sel_pane_id) = drag_info {
                 let pane_area = content_area(term_size, app);
-                let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
                 for (pid, rect) in &areas {
                     if *pid == sel_pane_id {
                         let inner_x = rect.x + 1;
@@ -3086,7 +3087,7 @@ async fn handle_mouse(
             // Forward mouse release to PTY if mouse reporting is active
             if app.drag_split.is_none() && app.drag_tab.is_none() {
                 let pane_area = content_area(term_size, app);
-                let areas = orbt_tui::tui::compute_leaf_areas(app.pane_tree(), pane_area);
+                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
                 for (pid, rect) in &areas {
                     if *pid == app.active_pane
                         && mouse.column > rect.x

@@ -129,7 +129,7 @@ async fn main() -> Result<()> {
         width: total_cols,
         height: total_rows,
     };
-    let areas = tui::compute_leaf_areas(app.pane_tree(), pane_area);
+    let areas = tui::compute_leaf_areas(&app.layout(), pane_area);
     for (pid, rect) in areas {
         let pc = rect.width;
         let pr = rect.height.saturating_sub(2);

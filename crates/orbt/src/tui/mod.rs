@@ -138,7 +138,7 @@ pub fn render(frame: &mut Frame, app: &App) {
 
     widgets::tab_bar::render(frame, rows[0], app);
     frame.render_widget(Clear, rows[1]);
-    render_pane_tree(frame, rows[1], app.pane_tree(), app);
+    render_pane_tree(frame, rows[1], &app.layout(), app);
     let status_inner = Rect {
         x: rows[2].x,
         y: rows[2].y,
@@ -295,7 +295,7 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
     match app.mobile_view {
         MobileView::Terminal => {
             frame.render_widget(Clear, content_area);
-            render_pane_tree(frame, content_area, app.pane_tree(), app);
+            render_pane_tree(frame, content_area, &app.layout(), app);
 
             // Overlay: command palette, eclipse modal, settings, etc.
             if matches!(app.mode, InputMode::CommandPalette { .. }) {
@@ -344,7 +344,7 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
         MobileView::Actions => {
             // PTY underneath (same as Terminal view), palette floats on top.
             // render_mobile dims the full content_area uniformly (no sidebar offset).
-            render_pane_tree(frame, content_area, app.pane_tree(), app);
+            render_pane_tree(frame, content_area, &app.layout(), app);
             if app.settings_open {
                 widgets::settings_modal::render(frame, content_area, app);
             } else {

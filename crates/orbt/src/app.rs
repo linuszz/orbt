@@ -604,6 +604,9 @@ pub struct App {
     pub tick_count: u64,
     pub drag_tab: Option<usize>,
     pub drag_split: Option<(PaneId, PaneId, SplitDir, f32)>,
+    /// When set, this pane is rendered alone at full size. The server-side
+    /// PaneLayout tree is untouched; other panes keep running, just hidden.
+    pub zoomed_pane: Option<PaneId>,
     pub theme_name: String,
     /// Runtime copy of `UserSettings::agent_fleet_enabled`. Set at startup, fixed for the session.
     pub agent_fleet_enabled: bool,
@@ -810,6 +813,7 @@ impl App {
             tick_count: 0,
             drag_tab: None,
             drag_split: None,
+            zoomed_pane: None,
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,
             settings_open: false,
@@ -912,8 +916,10 @@ impl App {
                     }
                 } else {
                     self.agent_panel_mode = AgentPanelMode::Sidebar;
-                    if !matches!(self.mode, InputMode::AgentPanel { .. } | InputMode::AgentFullScreen { .. })
-                    {
+                    if !matches!(
+                        self.mode,
+                        InputMode::AgentPanel { .. } | InputMode::AgentFullScreen { .. }
+                    ) {
                         self.mode = InputMode::AgentPanel { selected: 0 };
                     }
                 }
@@ -978,6 +984,30 @@ impl App {
 
     pub fn pane_tree(&self) -> &PaneLayout {
         &self.tabs[self.active_tab].pane_tree
+    }
+
+    /// Layout used for rendering and hit-testing. Collapses to a single leaf
+    /// when a pane is zoomed, so the zoomed pane fills the whole area.
+    pub fn layout(&self) -> std::borrow::Cow<'_, PaneLayout> {
+        match self.zoomed_pane {
+            Some(pid) => std::borrow::Cow::Owned(PaneLayout::Leaf(pid)),
+            None => std::borrow::Cow::Borrowed(self.pane_tree()),
+        }
+    }
+
+    pub fn toggle_zoom(&mut self) {
+        self.zoomed_pane = match self.zoomed_pane {
+            Some(pid) if pid == self.active_pane => None,
+            Some(_) => Some(self.active_pane),
+            None => {
+                if self.pane_tree().leaves().len() > 1 {
+                    Some(self.active_pane)
+                } else {
+                    None
+                }
+            }
+        };
+        self.needs_redraw = true;
     }
 
     pub fn current_tab_name(&self) -> &str {
@@ -1853,6 +1883,46 @@ pub mod tests {
         assert!(app.pane_in_current_tab(PaneId(1)));
         assert!(app.pane_in_current_tab(PaneId(2)));
         assert!(!app.pane_in_current_tab(PaneId(99)));
+    }
+
+    #[test]
+    fn zoom_collapses_layout_to_single_leaf() {
+        let mut state = minimal_state();
+        state.spaces[0].tabs[0].layout = PaneLayout::Split {
+            direction: SplitDir::Horizontal,
+            ratio: 0.5,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+        };
+        state.spaces[0].panes.push(PaneInfo {
+            id: PaneId(2),
+            tab_id: TabId(1),
+            title: String::new(),
+            cwd: "/tmp".to_string(),
+            cell_grid: CellGrid::new(80, 24),
+        });
+        let mut app = App::from_welcome(&state, 80, 24);
+        assert_eq!(app.layout().leaves().len(), 2);
+
+        app.active_pane = PaneId(2);
+        app.toggle_zoom();
+        assert_eq!(app.zoomed_pane, Some(PaneId(2)));
+        assert_eq!(app.layout().leaves(), vec![PaneId(2)]);
+        // Server-side tree is untouched — the other pane still exists.
+        assert_eq!(app.pane_tree().leaves().len(), 2);
+
+        // Zooming the same pane again unzooms.
+        app.toggle_zoom();
+        assert_eq!(app.zoomed_pane, None);
+        assert_eq!(app.layout().leaves().len(), 2);
+    }
+
+    #[test]
+    fn zoom_is_noop_with_single_pane() {
+        let state = minimal_state();
+        let mut app = App::from_welcome(&state, 80, 24);
+        app.toggle_zoom();
+        assert_eq!(app.zoomed_pane, None);
     }
 
     #[test]
