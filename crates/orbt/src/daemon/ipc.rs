@@ -111,6 +111,19 @@ where
                             tracing::warn!("new_tab: {e:#}");
                         }
                     }
+                    ClientMessage::SetTabLayout { layout } => {
+                        space_manager.apply_tab_layout(layout).await;
+                        let state = space_manager.collect_full_state().await;
+                        let active = state
+                            .spaces
+                            .iter()
+                            .find(|s| s.id == state.active_space)
+                            .or_else(|| state.spaces.first())
+                            .cloned();
+                        if let Some(info) = active {
+                            let _ = write_msg(&mut stream, &ServerEvent::SpaceUpdated(info)).await;
+                        }
+                    }
                     ClientMessage::CloseTab { tab_id } => {
                         let session = space_manager.active_session().await;
                         session.close_tab(tab_id).await;

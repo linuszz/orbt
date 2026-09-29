@@ -147,6 +147,11 @@ async fn main() -> Result<()> {
             .await;
     }
 
+    let _ = writer
+        .send(ClientMessage::SetTabLayout {
+            layout: app.layout_mode.into(),
+        })
+        .await;
     let _ = writer.send(ClientMessage::RequestFullState).await;
 
     debug!("entering event loop");

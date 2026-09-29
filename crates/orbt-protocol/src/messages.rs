@@ -68,6 +68,12 @@ pub enum ClientMessage {
         #[serde(default)]
         layout: crate::TabLayout,
     },
+    /// Layout preference for tabs that hold a single pane. The daemon applies
+    /// it to existing single-pane tabs; tabs the user has already split are
+    /// left alone. Sending this is optional.
+    SetTabLayout {
+        layout: crate::TabLayout,
+    },
     CloseTab {
         tab_id: crate::TabId,
     },

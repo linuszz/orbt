@@ -1318,6 +1318,30 @@ impl SpaceManager {
         }
     }
 
+    /// Retag every single-pane tab with `layout`.
+    ///
+    /// A tab holding one pane has no user-chosen arrangement yet, so adopting
+    /// the configured layout is lossless: `Leaf` and a one-entry `Strip` render
+    /// identically. Tabs the user already split keep their current layout.
+    pub async fn apply_tab_layout(&self, layout: TabLayout) {
+        let spaces = self.spaces.read().await;
+        for session in spaces.values() {
+            let mut tabs = session.tabs.write().await;
+            for tab in tabs.values_mut() {
+                let PaneLayout::Leaf(only) = tab.layout else {
+                    continue;
+                };
+                tab.layout = match layout {
+                    TabLayout::Bsp => PaneLayout::Leaf(only),
+                    TabLayout::Strip => PaneLayout::Strip {
+                        panes: vec![only],
+                        column_width: 80,
+                    },
+                };
+            }
+        }
+    }
+
     pub async fn collect_full_state(&self) -> FullState {
         let active = *self.active_space.read().await;
         let spaces = self.spaces.read().await;
@@ -1339,6 +1363,45 @@ impl SpaceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn apply_tab_layout_retags_only_single_pane_tabs() {
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(16);
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let mgr = SpaceManager::new(event_bus, shell, "/tmp".into(), 80, 24)
+            .await
+            .expect("space manager");
+
+        mgr.apply_tab_layout(TabLayout::Strip).await;
+
+        let state = mgr.collect_full_state().await;
+        let tab = &state.spaces[0].tabs[0];
+        assert!(
+            matches!(tab.layout, PaneLayout::Strip { .. }),
+            "the daemon's initial tab adopts the configured layout, got {:?}",
+            tab.layout
+        );
+
+        // A tab the user has already split keeps its arrangement.
+        let active = state.spaces[0].tabs[0].id;
+        mgr.apply_tab_layout(TabLayout::Bsp).await;
+        let after = mgr.collect_full_state().await;
+        assert!(
+            matches!(after.spaces[0].tabs[0].layout, PaneLayout::Strip { .. }),
+            "single-pane Strip round-trips back to Strip when asked for Bsp"
+        );
+        assert_eq!(after.active_space, state.active_space);
+        assert_eq!(after.spaces[0].tabs[0].id, active);
+    }
 
     #[tokio::test]
     async fn session_snapshot_restore_roundtrip() {
