@@ -1830,6 +1830,7 @@ version = "0.1.11"
 dependencies = [
  "anyhow",
  "arboard",
+ "base64",
  "bincode",
  "crossterm",
  "futures",

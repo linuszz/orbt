@@ -349,6 +349,7 @@ async fn execute_context_action(
                         lines.push(line);
                     }
                     let text = lines.join("\n");
+                    app.queue_osc52_copy(&text);
                     let _ = writer
                         .send(orbt_protocol::ClientMessage::CopyToClipboard { text })
                         .await;
@@ -821,6 +822,51 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
 
     match &mut app.mode {
         InputMode::Normal => {
+            if app.selection.is_some()
+                && key.code == KeyCode::Char('C')
+                && key.modifiers.contains(KeyModifiers::CONTROL)
+                && key.modifiers.contains(KeyModifiers::SHIFT)
+            {
+                if let Some(sel) = app.selection.take() {
+                    let pane_id = sel.pane_id;
+                    if let Some(pane_state) = app.panes.get(&pane_id) {
+                        let grid = &pane_state.parser.grid;
+                        let (min_col, max_col) = if sel.start.0 <= sel.end.0 {
+                            (sel.start.0 as usize, sel.end.0 as usize)
+                        } else {
+                            (sel.end.0 as usize, sel.start.0 as usize)
+                        };
+                        let (min_row, max_row) = if sel.start.1 <= sel.end.1 {
+                            (sel.start.1 as usize, sel.end.1 as usize)
+                        } else {
+                            (sel.end.1 as usize, sel.start.1 as usize)
+                        };
+                        let cols = grid.cols as usize;
+                        let max_row_clamped = max_row.min(grid.rows as usize - 1);
+                        let min_col_clamped = min_col.min(cols.saturating_sub(1));
+                        let max_col_clamped = max_col.min(cols.saturating_sub(1));
+                        let mut lines: Vec<String> = Vec::new();
+                        for row in min_row..=max_row_clamped {
+                            let row_start = row * cols;
+                            let line: String = grid.cells
+                                [row_start + min_col_clamped..=row_start + max_col_clamped]
+                                .iter()
+                                .map(|c| if c.ch == '\0' { ' ' } else { c.ch })
+                                .collect::<String>()
+                                .trim_end()
+                                .to_string();
+                            lines.push(line);
+                        }
+                        let text = lines.join("\n");
+                        app.queue_osc52_copy(&text);
+                        let _ = writer
+                            .send(ClientMessage::CopyToClipboard { text })
+                            .await;
+                    }
+                }
+                app.needs_redraw = true;
+                return;
+            }
             if app.selection.is_some() {
                 app.selection = None;
                 app.needs_redraw = true;
@@ -1269,6 +1315,11 @@ pub async fn run(
                 terminal.draw(|frame| render(frame, app))?;
             }
             app.needs_redraw = false;
+            if let Some(osc52) = app.pending_osc52.take() {
+                use std::io::Write;
+                let _ = terminal.backend_mut().write_all(osc52.as_bytes());
+                let _ = terminal.backend_mut().flush();
+            }
         }
 
         if app.needs_resize {

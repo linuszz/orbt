@@ -832,6 +832,12 @@ impl App {
         }
     }
 
+    pub fn queue_osc52_copy(&mut self, text: &str) {
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(text.as_bytes());
+        self.pending_osc52 = Some(format!("\x1b]52;c;{encoded}\x07"));
+    }
+
     /// Sort agents: Blocked first, then Working, then Error, then Idle/Done.
     pub fn sort_agents(&mut self) {
         // Save the currently-selected agent's ID so the cursor follows it through the sort.

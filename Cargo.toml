@@ -38,6 +38,7 @@ thiserror = "1"
 
 # Misc
 regex = "1"
+base64 = "0.22"
 futures = "0.3"
 unicode-width = "0.2"
 
