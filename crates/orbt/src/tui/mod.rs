@@ -449,17 +449,54 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     );
 }
 
-/// Lay out a scrollable strip inside `area`.
+/// Scroll offset that brings `focus` into view with the smallest possible move.
 ///
-/// Panes are placed left to right at `column_width` each. The viewport is
-/// scrolled so `focus` is fully visible; when the strip is narrower than the
-/// viewport it is pinned to the left edge. Panes scrolled past either edge get
-/// zero-width rects so callers can skip them.
-pub fn strip_areas(
+/// Keeping the viewport still while the focus is already visible is what makes
+/// strip navigation feel stable: crossing to an adjacent pane does not shift
+/// the screen, and only a focus that has actually left the viewport scrolls it.
+pub fn strip_scroll_target(
     panes: &[PaneId],
     column_width: u16,
     area: Rect,
     focus: PaneId,
+    current: usize,
+) -> usize {
+    if panes.is_empty() {
+        return 0;
+    }
+    let width = column_width.max(1) as usize;
+    let total = width * panes.len();
+    let viewport = area.width as usize;
+    if total <= viewport {
+        return 0;
+    }
+    let max_scroll = total - viewport;
+    let scroll = current.min(max_scroll);
+
+    let focus_idx = panes.iter().position(|&p| p == focus).unwrap_or(0);
+    let focus_start = focus_idx * width;
+    let focus_end = focus_start + width;
+
+    if focus_start < scroll {
+        // Focus sits left of the viewport: pull it flush with the left edge.
+        focus_start
+    } else if focus_end > scroll + viewport {
+        // Focus extends past the right edge: push it flush with the right edge.
+        (focus_end - viewport).min(max_scroll)
+    } else {
+        scroll
+    }
+}
+
+/// Lay out a scrollable strip inside `area` at a fixed scroll offset.
+///
+/// Panes scrolled past either edge get zero-width rects so callers can skip
+/// them.
+pub fn strip_areas_at(
+    panes: &[PaneId],
+    column_width: u16,
+    area: Rect,
+    scroll: usize,
 ) -> Vec<(PaneId, Rect)> {
     if panes.is_empty() {
         return Vec::new();
@@ -467,18 +504,7 @@ pub fn strip_areas(
     let width = column_width.max(1) as usize;
     let total = width * panes.len();
     let viewport = area.width as usize;
-
-    let focus_idx = panes.iter().position(|&p| p == focus).unwrap_or(0);
-    let focus_start = focus_idx * width;
-
-    // Scroll left edge so the focused pane sits inside the viewport.
-    let scroll = if total <= viewport {
-        0
-    } else {
-        focus_start
-            .saturating_sub(viewport.saturating_sub(width) / 2)
-            .min(total - viewport)
-    };
+    let scroll = scroll.min(total.saturating_sub(viewport));
 
     panes
         .iter()
@@ -519,11 +545,17 @@ pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> 
         PaneLayout::Strip {
             panes,
             column_width,
-        } => strip_areas(
+        } => strip_areas_at(
             panes,
             *column_width,
             area,
-            panes.first().copied().unwrap_or(PaneId(0)),
+            strip_scroll_target(
+                panes,
+                *column_width,
+                area,
+                panes.first().copied().unwrap_or(PaneId(0)),
+                0,
+            ),
         ),
     }
 }
@@ -540,8 +572,7 @@ pub fn find_split_at_cursor(
             panes,
             column_width,
         } => {
-            let focus = panes.first().copied().unwrap_or(PaneId(0));
-            let rects = strip_areas(panes, *column_width, area, focus);
+            let rects = strip_areas_at(panes, *column_width, area, 0);
             for w in rects.windows(2) {
                 let (left_id, left) = w[0];
                 let (right_id, right) = w[1];
@@ -603,7 +634,15 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             panes,
             column_width,
         } => {
-            let areas = strip_areas(panes, *column_width, area, app.active_pane);
+            let scroll = strip_scroll_target(
+                panes,
+                *column_width,
+                area,
+                app.active_pane,
+                app.strip_scroll.get(),
+            );
+            app.strip_scroll.set(scroll);
+            let areas = strip_areas_at(panes, *column_width, area, scroll);
             for (pid, rect) in &areas {
                 if rect.width > 0 {
                     render_single_pane(frame, *rect, *pid, app);
@@ -1485,11 +1524,18 @@ mod tests {
     }
 
     const STRIP: [PaneId; 4] = [PaneId(1), PaneId(2), PaneId(3), PaneId(4)];
+    const W: u16 = 40;
+
+    fn scroll_for(focus: PaneId, area: Rect, current: usize) -> usize {
+        strip_scroll_target(&STRIP, W, area, focus, current)
+    }
 
     #[test]
     fn strip_fits_without_scrolling() {
         let area = Rect::new(0, 0, 200, 10);
-        let areas = strip_areas(&STRIP, 40, area, PaneId(1));
+        let scroll = scroll_for(PaneId(1), area, 0);
+        assert_eq!(scroll, 0);
+        let areas = strip_areas_at(&STRIP, W, area, scroll);
         assert_eq!(areas.len(), 4);
         for (i, (_, r)) in areas.iter().enumerate() {
             assert_eq!(r.x, i as u16 * 40, "pane {i} x");
@@ -1498,36 +1544,69 @@ mod tests {
     }
 
     #[test]
-    fn strip_scrolls_to_keep_focus_visible() {
+    fn strip_viewport_stays_put_while_focus_is_visible() {
         let area = Rect::new(0, 0, 100, 10);
-        let areas = strip_areas(&STRIP, 40, area, PaneId(4));
-        let last = areas[3].1;
-        assert!(
-            last.x < 100 && last.x + last.width <= 100,
-            "focused pane is on screen"
+        // Scrolled to show panes 1..3; panes 2 and 3 are fully inside it.
+        let start = scroll_for(PaneId(2), area, 0);
+        assert_eq!(start, 0, "focusing the first pane needs no scroll");
+        let mid = scroll_for(PaneId(2), area, 40);
+        assert_eq!(mid, 40, "focus inside the viewport leaves it alone");
+        assert_eq!(
+            scroll_for(PaneId(3), area, 40),
+            40,
+            "moving to a pane still fully visible does not shift the viewport"
         );
-        assert!(last.width > 0, "focused pane is not clipped away");
-        // Panes scrolled off the left edge collapse to zero width.
-        assert!(areas[0].1.width < 40, "earlier panes scroll off the left");
     }
 
     #[test]
-    fn strip_viewport_is_clamped_to_content_end() {
+    fn strip_scrolls_only_as_far_as_needed() {
         let area = Rect::new(0, 0, 100, 10);
-        // Total content is 160 cols; the view can never start past 60.
-        let areas = strip_areas(&STRIP, 40, area, PaneId(4));
-        let right_edge = areas[3].1.x + areas[3].1.width;
-        assert!(right_edge <= 100, "no gap at the right edge");
+        // Last pane starts at 120 and ends at 160; the viewport is 100 wide.
+        let s = scroll_for(PaneId(4), area, 0);
+        assert_eq!(s, 60, "scrolls just enough to flush the focus to the right");
+        let areas = strip_areas_at(&STRIP, W, area, s);
+        let last = areas[3].1;
+        assert_eq!(
+            last.x + last.width,
+            100,
+            "focus ends flush with the right edge"
+        );
+    }
+
+    #[test]
+    fn strip_scroll_back_to_first_pane_is_flush_left() {
+        let area = Rect::new(0, 0, 100, 10);
+        let s = strip_scroll_target(&STRIP, W, area, PaneId(1), 60);
+        assert_eq!(s, 0, "focus is pulled flush to the left edge");
+        let areas = strip_areas_at(&STRIP, W, area, s);
+        assert_eq!(areas[0].1.x, 0);
+        assert_eq!(areas[0].1.width, 40, "the focused pane is fully visible");
+    }
+
+    #[test]
+    fn strip_scroll_is_clamped_to_content() {
+        let area = Rect::new(0, 0, 100, 10);
+        // Content is 160 columns, so scroll can never exceed 60.
+        let s = strip_scroll_target(&STRIP, W, area, PaneId(4), 999);
+        assert!(s <= 60, "scroll stays inside the content, got {s}");
     }
 
     #[test]
     fn strip_focus_stays_put_when_other_panes_close() {
         let area = Rect::new(0, 0, 100, 10);
-        let before = strip_areas(&STRIP, 40, area, PaneId(3));
-        let after = strip_areas(&[PaneId(2), PaneId(3), PaneId(4)], 40, area, PaneId(3));
+        let before_scroll = scroll_for(PaneId(4), area, 0);
+        let before = strip_areas_at(&STRIP, W, area, before_scroll);
+
+        // Pane 1 closes while pane 4 holds focus. The strip shrinks by one
+        // column, so the viewport must give back the same amount or the
+        // focused pane would slide across the screen.
+        let remaining = [PaneId(2), PaneId(3), PaneId(4)];
+        let after_scroll = strip_scroll_target(&remaining, W, area, PaneId(4), before_scroll);
+        let after = strip_areas_at(&remaining, W, area, after_scroll);
+
         assert_eq!(
-            after[1].1.x, before[2].1.x,
-            "viewport scrolls to compensate, so the focused pane does not move on screen"
+            after[2].1.x, before[3].1.x,
+            "viewport compensates, so the focused pane does not move on screen"
         );
     }
 }
