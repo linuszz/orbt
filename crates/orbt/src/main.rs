@@ -37,6 +37,20 @@ async fn connect_local_with_autostart() -> Result<(
         return Ok((w, r, state));
     }
 
+    // A socket we cannot talk to is almost always an orbtd from an older
+    // build: it holds the lock, so a freshly spawned one exits immediately and
+    // its complaint (discarded via Stdio::null) never reaches the user.
+    let stale = orbt_protocol::default_socket_path().exists();
+    if stale {
+        anyhow::bail!(
+            "an orbtd is already listening on {} but refused the connection.\n\
+             It is most likely an older build — the wire format changed, so it and \
+             this client cannot talk. Restart it:\n\
+             \n    pkill -f 'orbt daemon'\n",
+            orbt_protocol::default_socket_path().display()
+        );
+    }
+
     debug!("orbtd not running, auto-starting daemon...");
     let exe = std::env::current_exe().context("cannot resolve orbit binary path")?;
     std::process::Command::new(&exe)
@@ -56,12 +70,10 @@ async fn connect_local_with_autostart() -> Result<(
         }
     }
 
-    // Final attempt — return a proper error if it still hasn't come up.
-    let (ipc, state) = IpcClient::connect()
-        .await
-        .context("orbtd did not start in time — check logs with ORBT_LOG_LEVEL=debug")?;
-    let (w, r) = ipc.into_split();
-    Ok((w, r, state))
+    anyhow::bail!(
+        "started orbtd but it never accepted a connection within 2 s.\n\
+         Check its log with:  ORBT_LOG_LEVEL=debug orbt daemon"
+    );
 }
 
 #[tokio::main]
