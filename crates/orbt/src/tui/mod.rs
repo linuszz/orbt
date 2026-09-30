@@ -603,10 +603,41 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             panes,
             column_width,
         } => {
-            for (pid, rect) in strip_areas(panes, *column_width, area, app.active_pane) {
+            let areas = strip_areas(panes, *column_width, area, app.active_pane);
+            for (pid, rect) in &areas {
                 if rect.width > 0 {
-                    render_single_pane(frame, rect, pid, app);
+                    render_single_pane(frame, *rect, *pid, app);
                 }
+            }
+            // Overflow chevrons tell the user the strip continues past the edge.
+            let content = (*column_width as usize) * panes.len();
+            let viewport = area.width as usize;
+            let scrolled_right = content > viewport
+                && areas
+                    .last()
+                    .map(|(_, r)| r.x + r.width < area.x + area.width)
+                    .unwrap_or(false);
+            if areas.first().map(|(_, r)| r.width == 0).unwrap_or(false) {
+                frame.render_widget(
+                    Paragraph::new("‹").style(Style::default().fg(accent_idle())),
+                    Rect {
+                        x: area.x,
+                        y: area.y,
+                        width: 1,
+                        height: 1,
+                    },
+                );
+            }
+            if scrolled_right {
+                frame.render_widget(
+                    Paragraph::new("›").style(Style::default().fg(accent_idle())),
+                    Rect {
+                        x: area.x + area.width.saturating_sub(1),
+                        y: area.y,
+                        width: 1,
+                        height: 1,
+                    },
+                );
             }
         }
         PaneLayout::Split {
@@ -679,9 +710,9 @@ fn split_area(area: Rect, dir: &SplitDir, ratio: f32) -> (Rect, Rect) {
 
 fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App) {
     let is_active = pane_id == app.active_pane;
-    let pane_idx = app
-        .pane_tree()
-        .leaves()
+    let leaves = app.pane_tree().leaves();
+    let total = leaves.len();
+    let pane_idx = leaves
         .iter()
         .position(|&p| p == pane_id)
         .map(|i| i + 1)
@@ -689,15 +720,30 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App)
 
     let border_color = if is_active { accent() } else { border() };
 
-    let title = if is_active {
-        format!(" {pane_idx}:~ *")
+    // Position within the strip, so a scrolled-away pane is still identifiable.
+    let title = if total > 1 {
+        if is_active {
+            format!(" {pane_idx}/{total} *")
+        } else {
+            format!(" {pane_idx}/{total} ")
+        }
+    } else if is_active {
+        " 1 *".to_string()
     } else {
-        format!(" {pane_idx}:~ ")
+        " 1".to_string()
     };
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color))
+        .border_style(
+            Style::default()
+                .fg(border_color)
+                .add_modifier(if is_active {
+                    Modifier::BOLD
+                } else {
+                    Modifier::empty()
+                }),
+        )
         .title(Span::styled(
             title,
             Style::default()
@@ -1020,7 +1066,7 @@ mod tests {
         // Sidebar should show space name "dev"
         assert!(buffer_contains(&terminal, "dev"));
         // Pane border should show pane number
-        assert!(buffer_contains(&terminal, "1:~"));
+        assert!(buffer_contains(&terminal, "1 *"));
         // Status bar should show space name and idle satellite status
         assert!(buffer_contains(&terminal, "[SPACE]"));
         assert!(buffer_contains(&terminal, "idle"));
@@ -1150,9 +1196,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
 
-        // Should show both pane numbers
-        assert!(buffer_contains(&terminal, "1:~"));
-        assert!(buffer_contains(&terminal, "2:~"));
+        // Both panes show their position in the strip; the focused one is marked.
+        assert!(buffer_contains(&terminal, "1/2 *"));
+        assert!(buffer_contains(&terminal, "2/2"));
     }
 
     #[test]
