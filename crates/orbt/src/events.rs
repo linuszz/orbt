@@ -418,16 +418,74 @@ async fn execute_context_action(
             }
         }
         "close_space" => {
-            if let ContextMenuTarget::Space(space_id) = target {
-                let _ = writer
-                    .send(ClientMessage::CloseSpace {
-                        space_id: *space_id,
-                    })
-                    .await;
+            // Invoked from the sidebar context menu (with an explicit target) or
+            // from the command palette (no target — fall back to the live one).
+            let space_id = match target {
+                ContextMenuTarget::Space(id) => Some(*id),
+                _ => app.spaces.get(app.active_space_idx).map(|s| s.space_id),
+            };
+            if let Some(space_id) = space_id {
+                if app.spaces.len() > 1 {
+                    let _ = writer.send(ClientMessage::CloseSpace { space_id }).await;
+                }
             }
         }
         "new_space" => {
             let _ = writer.send(ClientMessage::CreateSpace { name: None }).await;
+        }
+        "next_space" | "prev_space" => {
+            let n = app.spaces.len();
+            if n > 1 {
+                let delta = if id == "next_space" { 1i32 } else { -1 };
+                let idx = (app.active_space_idx as i32 + delta).rem_euclid(n as i32) as usize;
+                app.active_space_idx = idx;
+                let space_id = app.spaces[idx].space_id;
+                let _ = writer.send(ClientMessage::SwitchSpace { space_id }).await;
+            }
+        }
+        "move_tab_left" | "move_tab_right" => {
+            let len = app.tabs.len();
+            if len > 1 {
+                let cur = app.active_tab;
+                let next = if id == "move_tab_left" {
+                    cur.saturating_sub(1)
+                } else {
+                    (cur + 1).min(len - 1)
+                };
+                if next != cur {
+                    let tab_id = app.tabs[cur].id;
+                    app.tabs.swap(cur, next);
+                    app.active_tab = next;
+                    let _ = writer
+                        .send(ClientMessage::ReorderTab {
+                            tab_id,
+                            to_index: next,
+                        })
+                        .await;
+                }
+            }
+        }
+        "move_space_left" | "move_space_down" => {
+            let n = app.spaces.len();
+            if n > 1 {
+                let cur = app.active_space_idx;
+                let next = if id == "move_space_left" {
+                    cur.saturating_sub(1)
+                } else {
+                    (cur + 1).min(n - 1)
+                };
+                if next != cur {
+                    app.spaces.swap(cur, next);
+                    app.active_space_idx = next;
+                    let space_id = app.spaces[cur].space_id;
+                    let _ = writer
+                        .send(ClientMessage::ReorderSpace {
+                            space_id,
+                            to_index: cur,
+                        })
+                        .await;
+                }
+            }
         }
         _ => {}
     }

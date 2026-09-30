@@ -462,6 +462,18 @@ pub static COMMANDS: &[CommandDef] = &[
         shortcut: "n",
     },
     CommandDef {
+        id: "move_tab_left",
+        label: "Move Tab Left",
+        group: "Tab",
+        shortcut: "{",
+    },
+    CommandDef {
+        id: "move_tab_right",
+        label: "Move Tab Right",
+        group: "Tab",
+        shortcut: "}",
+    },
+    CommandDef {
         id: "prev_tab",
         label: "Previous Tab",
         group: "Tab",
@@ -473,6 +485,42 @@ pub static COMMANDS: &[CommandDef] = &[
         label: "Detach Session",
         group: "Session",
         shortcut: "d",
+    },
+    CommandDef {
+        id: "new_space",
+        label: "New Space",
+        group: "Space",
+        shortcut: "C",
+    },
+    CommandDef {
+        id: "close_space",
+        label: "Close Space",
+        group: "Space",
+        shortcut: "",
+    },
+    CommandDef {
+        id: "next_space",
+        label: "Next Space",
+        group: "Space",
+        shortcut: "S",
+    },
+    CommandDef {
+        id: "prev_space",
+        label: "Previous Space",
+        group: "Space",
+        shortcut: "R",
+    },
+    CommandDef {
+        id: "move_space_left",
+        label: "Move Space Up",
+        group: "Space",
+        shortcut: "",
+    },
+    CommandDef {
+        id: "move_space_down",
+        label: "Move Space Down",
+        group: "Space",
+        shortcut: "",
     },
     // Orbit extensions (not in tmux but useful)
     CommandDef {

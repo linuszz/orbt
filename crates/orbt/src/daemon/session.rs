@@ -1393,6 +1393,81 @@ mod tests {
     /// path that takes them in the opposite order. Two spaces make that
     /// ordering observable.
     #[tokio::test]
+    async fn reorder_tab_moves_the_tab_in_the_ordering() {
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(64);
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let session = SessionState::new(event_bus, shell, "/tmp".into(), 80, 24)
+            .await
+            .expect("session");
+        session.new_tab(None, TabLayout::Bsp).await.expect("tab 1");
+        session.new_tab(None, TabLayout::Bsp).await.expect("tab 2");
+        let before = session.tab_order.read().await.clone();
+        assert_eq!(before.len(), 3, "initial tab plus two new ones");
+
+        let moved = before[2];
+        session.reorder_tab(moved, 0).await;
+        let after = session.tab_order.read().await.clone();
+        assert_eq!(
+            after[0], moved,
+            "the moved tab lands at the requested index"
+        );
+        assert_eq!(
+            after.len(),
+            before.len(),
+            "reordering never adds or drops tabs"
+        );
+        let unique = after.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), after.len(), "no tab is duplicated or lost");
+
+        // Out-of-range indices clamp instead of panicking.
+        session.reorder_tab(moved, 99).await;
+        assert_eq!(session.tab_order.read().await.len(), before.len());
+    }
+
+    #[tokio::test]
+    async fn reorder_space_moves_the_space_in_the_ordering() {
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(64);
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let mgr = SpaceManager::new(event_bus, shell, "/tmp".into(), 80, 24)
+            .await
+            .expect("space manager");
+        mgr.create_space(Some("second".into()))
+            .await
+            .expect("create space");
+        mgr.create_space(Some("third".into()))
+            .await
+            .expect("create space");
+        let before = mgr.space_order.read().await.clone();
+        assert_eq!(before.len(), 3);
+
+        let moved = before[2];
+        mgr.reorder_space(moved, 0).await;
+        let after = mgr.space_order.read().await.clone();
+        assert_eq!(after[0], moved, "the moved space leads the ordering");
+        assert_eq!(after.len(), before.len(), "no space is added or dropped");
+        let unique = after.iter().collect::<std::collections::HashSet<_>>();
+        assert_eq!(unique.len(), after.len(), "no space is duplicated or lost");
+    }
+
+    #[tokio::test]
     async fn apply_tab_layout_completes_with_multiple_spaces() {
         use tokio::sync::broadcast;
 
