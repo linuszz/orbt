@@ -239,14 +239,28 @@ pub enum PaneLayout {
         #[serde(default = "default_ratio")]
         ratio: f32,
     },
-    /// Scrollable strip: panes side by side on an unbounded horizontal band.
-    /// Opening a pane appends without resizing the others; the viewport scrolls
-    /// to keep the focused pane visible.
+    /// Scrollable strip: columns laid out left to right on an unbounded band.
+    /// Panes stack vertically inside a column, so opening one sideways adds a
+    /// column while opening one downwards joins the current column. Neither
+    /// resizes the columns that already exist; the viewport scrolls to keep
+    /// the focused pane visible.
     Strip {
-        panes: Vec<PaneId>,
+        columns: Vec<StripColumn>,
         #[serde(default = "default_strip_column_width")]
         column_width: u16,
     },
+}
+
+/// One column of a scrollable strip. Panes within it share the column's height.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StripColumn {
+    pub panes: Vec<PaneId>,
+}
+
+impl StripColumn {
+    pub fn single(pane: PaneId) -> Self {
+        Self { panes: vec![pane] }
+    }
 }
 
 fn default_ratio() -> f32 {
@@ -283,11 +297,20 @@ impl PaneLayout {
                 first.split_leaf(target, _direction, new_id)
                     || second.split_leaf(target, _direction, new_id)
             }
-            PaneLayout::Strip { panes, .. } => {
-                if !panes.contains(&target) {
+            PaneLayout::Strip { columns, .. } => {
+                let Some(col) = columns.iter_mut().find(|c| c.panes.contains(&target)) else {
                     return false;
+                };
+                match _direction {
+                    SplitDir::Horizontal => {
+                        let at = columns
+                            .iter()
+                            .position(|c| c.panes.contains(&target))
+                            .unwrap_or(0);
+                        columns.insert(at + 1, StripColumn::single(new_id));
+                    }
+                    SplitDir::Vertical => col.panes.push(new_id),
                 }
-                panes.push(new_id);
                 true
             }
         }
@@ -316,20 +339,9 @@ impl PaneLayout {
                 first.set_split_ratio(first_pane, second_pane, ratio)
                     || second.set_split_ratio(first_pane, second_pane, ratio)
             }
-            PaneLayout::Strip {
-                panes,
-                column_width,
-            } => {
-                let adjacent = panes
-                    .iter()
-                    .position(|&p| p == first_pane)
-                    .is_some_and(|i| panes.get(i + 1) == Some(&second_pane));
-                if !adjacent {
-                    return false;
-                }
-                // Strips resize by absolute width, not by ratio. The caller
-                // sends SetColumnWidth; ignore the ratio here.
-                let _ = column_width;
+            PaneLayout::Strip { .. } => {
+                // Strips resize by absolute width via SetColumnWidth; a split
+                // ratio carries no meaning here.
                 false
             }
         }
@@ -355,12 +367,17 @@ impl PaneLayout {
                 second.remove_leaf(target);
                 true
             }
-            PaneLayout::Strip { panes, .. } => {
-                if let Some(idx) = panes.iter().position(|&p| p == target) {
-                    panes.remove(idx);
+            PaneLayout::Strip { columns, .. } => {
+                for col in columns.iter_mut() {
+                    if let Some(idx) = col.panes.iter().position(|&p| p == target) {
+                        col.panes.remove(idx);
+                    }
                 }
-                if panes.len() == 1 {
-                    *self = PaneLayout::Leaf(panes[0]);
+                columns.retain(|c| !c.panes.is_empty());
+                if let [only] = &columns[..] {
+                    if let [pane] = &only.panes[..] {
+                        *self = PaneLayout::Leaf(*pane);
+                    }
                 }
                 true
             }
@@ -375,7 +392,10 @@ impl PaneLayout {
                 v.extend(second.leaves());
                 v
             }
-            PaneLayout::Strip { panes, .. } => panes.clone(),
+            PaneLayout::Strip { columns, .. } => columns
+                .iter()
+                .flat_map(|c| c.panes.iter().copied())
+                .collect(),
         }
     }
 
@@ -405,27 +425,49 @@ impl PaneLayout {
                         .or_else(|| second.find_pane_in_direction(current, split_dir, positive))
                 }
             }
-            PaneLayout::Strip { panes, .. } => {
-                if split_dir != SplitDir::Horizontal {
-                    return None;
+            PaneLayout::Strip { columns, .. } => {
+                let (col_idx, row_idx) = columns.iter().enumerate().find_map(|(ci, c)| {
+                    c.panes
+                        .iter()
+                        .position(|&p| p == current)
+                        .map(|ri| (ci, ri))
+                })?;
+                match split_dir {
+                    SplitDir::Vertical => {
+                        let col = &columns[col_idx];
+                        let next = if positive {
+                            row_idx + 1
+                        } else {
+                            row_idx.checked_sub(1)?
+                        };
+                        col.panes.get(next).copied()
+                    }
+                    SplitDir::Horizontal => {
+                        // Step to the neighbouring column, keeping the same row
+                        // when it exists there.
+                        let next_col = if positive {
+                            col_idx + 1
+                        } else {
+                            col_idx.checked_sub(1)?
+                        };
+                        let target = columns.get(next_col)?;
+                        target
+                            .panes
+                            .get(row_idx)
+                            .or_else(|| target.panes.last())
+                            .copied()
+                    }
                 }
-                let idx = panes.iter().position(|&p| p == current)?;
-                let next = if positive {
-                    idx + 1
-                } else {
-                    idx.checked_sub(1)?
-                };
-                panes.get(next).copied()
             }
         }
     }
 
-    pub fn as_strip(&self) -> Option<(&[PaneId], u16)> {
+    pub fn as_strip(&self) -> Option<(&[StripColumn], u16)> {
         match self {
             PaneLayout::Strip {
-                panes,
+                columns,
                 column_width,
-            } => Some((panes, *column_width)),
+            } => Some((columns, *column_width)),
             _ => None,
         }
     }
@@ -443,21 +485,25 @@ impl PaneLayout {
     /// Swap `pane` with its neighbour in a strip. Returns false on split trees
     /// and at the ends of the strip, where there is nothing to swap with.
     pub fn swap_pane(&mut self, pane: PaneId, towards_left: bool) -> bool {
-        let PaneLayout::Strip { panes, .. } = self else {
+        let PaneLayout::Strip { columns, .. } = self else {
             return false;
         };
-        let Some(idx) = panes.iter().position(|&p| p == pane) else {
+        let Some((col_idx, row_idx)) = columns
+            .iter()
+            .enumerate()
+            .find_map(|(ci, c)| c.panes.iter().position(|&p| p == pane).map(|ri| (ci, ri)))
+        else {
             return false;
         };
-        let neighbour: Option<usize> = if towards_left {
-            idx.checked_sub(1)
-        } else {
-            panes.get(idx + 1).map(|_| idx + 1)
-        };
-        let Some(other) = neighbour else {
+        // Left/right reorders columns; the command only ever moves a pane
+        // sideways, so that is the axis it acts on.
+        let step: isize = if towards_left { -1 } else { 1 };
+        let target = col_idx as isize + step;
+        if target < 0 || target as usize >= columns.len() {
             return false;
-        };
-        panes.swap(idx, other);
+        }
+        columns.swap(col_idx, target as usize);
+        let _ = row_idx;
         true
     }
 }
@@ -527,7 +573,11 @@ pub struct ScrollbackLine {
 #[test]
 fn strip_swap_moves_pane_between_slots() {
     let mut layout = PaneLayout::Strip {
-        panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+        columns: vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ],
         column_width: 80,
     };
     assert!(layout.swap_pane(PaneId(2), true));
@@ -546,7 +596,7 @@ fn strip_swap_moves_pane_between_slots() {
 #[test]
 fn strip_column_width_clamps_and_ignores_split_trees() {
     let mut strip = PaneLayout::Strip {
-        panes: vec![PaneId(1)],
+        columns: vec![StripColumn::single(PaneId(1))],
         column_width: 80,
     };
     assert!(strip.set_column_width(120));
@@ -579,11 +629,123 @@ fn strip_ratio_resize_is_a_no_op() {
     // Strips size by absolute width; ResizeSplit must not quietly scale
     // the column by the drag ratio.
     let mut strip = PaneLayout::Strip {
-        panes: vec![PaneId(1), PaneId(2)],
+        columns: vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+        ],
         column_width: 80,
     };
     assert!(!strip.set_split_ratio(PaneId(1), PaneId(2), 0.9));
     assert_eq!(strip.as_strip().map(|(_, w)| w), Some(80));
+}
+
+#[test]
+fn strip_split_h_adds_a_column_and_split_v_stacks() {
+    let mut layout = PaneLayout::Strip {
+        columns: vec![StripColumn::single(PaneId(1))],
+        column_width: 80,
+    };
+    // Sideways opens a new column to the right; the existing column is untouched.
+    assert!(layout.split_leaf(PaneId(1), SplitDir::Horizontal, PaneId(2)));
+    assert_eq!(layout.leaves(), vec![PaneId(1), PaneId(2)]);
+    assert_eq!(layout.as_strip().unwrap().0.len(), 2, "two columns now");
+
+    // Downwards joins the pane's own column instead of creating one.
+    assert!(layout.split_leaf(PaneId(1), SplitDir::Vertical, PaneId(3)));
+    let columns = layout.as_strip().unwrap().0;
+    assert_eq!(columns.len(), 2, "still two columns");
+    assert_eq!(columns[0].panes, vec![PaneId(1), PaneId(3)], "stacked");
+    assert_eq!(columns[1].panes, vec![PaneId(2)]);
+}
+
+#[test]
+fn strip_vertical_navigation_walks_within_a_column() {
+    let layout = PaneLayout::Strip {
+        columns: vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+        ],
+        column_width: 80,
+    };
+    assert_eq!(
+        layout.find_pane_in_direction(PaneId(1), SplitDir::Vertical, true),
+        Some(PaneId(2)),
+        "down moves to the pane below"
+    );
+    assert_eq!(
+        layout.find_pane_in_direction(PaneId(2), SplitDir::Vertical, false),
+        Some(PaneId(1))
+    );
+    assert_eq!(
+        layout.find_pane_in_direction(PaneId(2), SplitDir::Vertical, true),
+        None,
+        "nothing below the last pane in the column"
+    );
+}
+
+#[test]
+fn strip_horizontal_navigation_crosses_columns() {
+    let layout = PaneLayout::Strip {
+        columns: vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+        ],
+        column_width: 80,
+    };
+    assert_eq!(
+        layout.find_pane_in_direction(PaneId(1), SplitDir::Horizontal, true),
+        Some(PaneId(3)),
+        "row 1 has no counterpart, so it falls back to the column's only pane"
+    );
+    assert_eq!(
+        layout.find_pane_in_direction(PaneId(3), SplitDir::Horizontal, false),
+        Some(PaneId(1)),
+        "moving back lands on the same row when it exists"
+    );
+}
+
+#[test]
+fn strip_removing_the_last_pane_of_a_column_drops_it() {
+    let mut layout = PaneLayout::Strip {
+        columns: vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+        ],
+        column_width: 80,
+    };
+    layout.remove_leaf(PaneId(2));
+    let columns = layout.as_strip().unwrap().0;
+    assert_eq!(columns.len(), 2, "the column survives while a pane remains");
+    assert_eq!(columns[0].panes, vec![PaneId(1)]);
+
+    // Removing it empties the first column and drops it, leaving one pane
+    // overall, which collapses back to a plain Leaf.
+    layout.remove_leaf(PaneId(1));
+    assert!(
+        matches!(layout, PaneLayout::Leaf(_)),
+        "one pane is a Leaf again"
+    );
+    assert_eq!(layout.leaves(), vec![PaneId(3)]);
+}
+
+#[test]
+fn strip_collapses_to_leaf_when_a_single_pane_remains() {
+    let mut layout = PaneLayout::Strip {
+        columns: vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+        ],
+        column_width: 80,
+    };
+    layout.remove_leaf(PaneId(1));
+    assert!(matches!(layout, PaneLayout::Leaf(_)), "one pane is a Leaf");
+    assert_eq!(layout.leaves(), vec![PaneId(2)]);
 }
 
 #[cfg(test)]

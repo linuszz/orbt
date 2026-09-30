@@ -392,7 +392,7 @@ impl SessionState {
                     layout: match layout {
                         TabLayout::Bsp => PaneLayout::Leaf(pane_id),
                         TabLayout::Strip => PaneLayout::Strip {
-                            panes: vec![pane_id],
+                            columns: vec![orbt_protocol::StripColumn::single(pane_id)],
                             column_width: 80,
                         },
                     },
@@ -1358,7 +1358,7 @@ impl SpaceManager {
                 tab.layout = match layout {
                     TabLayout::Bsp => PaneLayout::Leaf(only),
                     TabLayout::Strip => PaneLayout::Strip {
-                        panes: vec![only],
+                        columns: vec![orbt_protocol::StripColumn::single(only)],
                         column_width: 80,
                     },
                 };

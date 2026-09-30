@@ -20,6 +20,6 @@ pub use socket::default_socket_path;
 pub use types::{
     AcpDetail, AgentDetail, AgentId, AgentInfo, AgentLaunchRequest, AgentMetrics, AgentProtocol,
     AgentStatus, Cell, CellFlags, CellGrid, FileKind, FileTouched, FullState, ImageId, PaneId,
-    PaneInfo, PaneLayout, ScrollbackLine, SpaceId, SpaceInfo, SplitDir, TabId, TabInfo, TabLayout,
-    TermColor, ToolCall, ToolCallStatus,
+    PaneInfo, PaneLayout, ScrollbackLine, SpaceId, SpaceInfo, SplitDir, StripColumn, TabId,
+    TabInfo, TabLayout, TermColor, ToolCall, ToolCallStatus,
 };

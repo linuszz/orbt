@@ -72,7 +72,17 @@ pub fn load() -> anyhow::Result<Option<SessionSnapshot>> {
         return Ok(None);
     }
     let s = std::fs::read_to_string(&path)?;
-    let snap: SessionSnapshot = toml::from_str(&s)?;
+    let snap: SessionSnapshot = match toml::from_str(&s) {
+        Ok(snap) => snap,
+        Err(e) => {
+            // A snapshot written by an older build may no longer decode. Losing
+            // a restored session is far better than refusing to start, so drop
+            // the stale file and continue with a fresh session.
+            tracing::warn!("discarding unreadable session snapshot: {e:#}");
+            let _ = std::fs::remove_file(&path);
+            return Ok(None);
+        }
+    };
     Ok(Some(snap))
 }
 

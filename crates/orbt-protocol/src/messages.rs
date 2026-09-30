@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 5; // was 4; AgentInfo gains `launch_cmd` field
+pub const PROTOCOL_VERSION: u32 = 6; // was 5; PaneLayout::Strip holds columns, not a flat pane list
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {

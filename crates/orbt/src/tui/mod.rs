@@ -6,7 +6,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use orbt_protocol::{PaneId, SplitDir, TermColor};
+use orbt_protocol::{PaneId, PaneLayout, SplitDir, StripColumn, TermColor};
 use ratatui::{
     backend::CrosstermBackend,
     layout::Rect,
@@ -19,7 +19,6 @@ use std::io::{self, Stdout};
 
 use crate::app::{AgentPanelMode, App, InputMode, MobileView, PaneState, Selection};
 use orbt_protocol::Cell;
-use orbt_protocol::PaneLayout;
 use theme::*;
 use unicode_width::UnicodeWidthChar;
 
@@ -449,78 +448,100 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     );
 }
 
-/// Scroll offset that shows `focus` with every pane boundary lined up on a
-/// pane edge.
+/// Scroll offset that shows `focus` with its column parked against the left
+/// edge, so every column boundary lines up with the viewport edge.
 pub fn strip_scroll_target(
-    panes: &[PaneId],
+    columns: &[StripColumn],
     column_width: u16,
     area: Rect,
     focus: PaneId,
 ) -> usize {
-    if panes.is_empty() {
+    if columns.is_empty() {
         return 0;
     }
     let width = column_width.max(1) as usize;
-    let total = width * panes.len();
+    let total = width * columns.len();
     let viewport = area.width as usize;
     if total <= viewport {
         return 0;
     }
     let max_scroll = total - viewport;
-
-    let focus_idx = panes.iter().position(|&p| p == focus).unwrap_or(0);
-    let focus_start = focus_idx * width;
-    let focus_end = focus_start + width;
+    let focus_col = columns
+        .iter()
+        .position(|c| c.panes.contains(&focus))
+        .unwrap_or(0);
 
     if width >= viewport {
-        // The focused pane is wider than the viewport; keep its trailing edge in view.
-        (focus_end - viewport).min(max_scroll)
+        // The focused column is wider than the viewport; keep its trailing edge in view.
+        ((focus_col + 1) * width - viewport).min(max_scroll)
     } else {
-        // Park the focused pane against the left edge. This keeps every pane
-        // boundary aligned to a pane rather than leaving a permanently
-        // half-clipped pane hanging off the left of the screen.
-        focus_start.min(max_scroll)
+        (focus_col * width).min(max_scroll)
     }
 }
 
 /// Lay out a scrollable strip inside `area` at a fixed scroll offset.
 ///
-/// Panes scrolled past either edge get zero-width rects so callers can skip
-/// them.
+/// Columns are placed left to right at `column_width` each; panes inside a
+/// column split its height evenly. Column edges are rounded so the rows tile
+/// the column with no gaps or overlap. Columns scrolled past either edge get
+/// zero-width rects so callers can skip them.
 pub fn strip_areas_at(
-    panes: &[PaneId],
+    columns: &[StripColumn],
     column_width: u16,
     area: Rect,
     scroll: usize,
 ) -> Vec<(PaneId, Rect)> {
-    if panes.is_empty() {
+    if columns.is_empty() {
         return Vec::new();
     }
     let width = column_width.max(1) as usize;
-    let total = width * panes.len();
+    let total = width * columns.len();
     let viewport = area.width as usize;
     let scroll = scroll.min(total.saturating_sub(viewport));
 
-    panes
-        .iter()
-        .enumerate()
-        .map(|(i, &pid)| {
-            let x = i * width;
-            let visible_start = x.max(scroll);
-            let visible_end = (x + width).min(scroll + viewport);
-            let rect_w = visible_end.saturating_sub(visible_start) as u16;
-            let rel = visible_start.saturating_sub(scroll) as u16;
-            (
-                pid,
+    let mut out = Vec::new();
+    for (ci, column) in columns.iter().enumerate() {
+        let x = ci * width;
+        let visible_start = x.max(scroll);
+        let visible_end = (x + width).min(scroll + viewport);
+        let col_w = visible_end.saturating_sub(visible_start) as u16;
+        if col_w == 0 {
+            for &pane in &column.panes {
+                out.push((
+                    pane,
+                    Rect {
+                        x: area.x,
+                        y: area.y,
+                        width: 0,
+                        height: 0,
+                    },
+                ));
+            }
+            continue;
+        }
+        let col_x = area.x + (visible_start - scroll) as u16;
+
+        // Even split with the remainder handed to the upper panes, so the last
+        // pane always ends flush with the bottom of the column.
+        let n = column.panes.len();
+        let base = area.height / n as u16;
+        let extra = area.height % n as u16;
+        let mut y = area.y;
+        for (i, &pane) in column.panes.iter().enumerate() {
+            let h = base + u16::from(i < extra as usize);
+            out.push((
+                pane,
                 Rect {
-                    x: area.x + rel,
-                    y: area.y,
-                    width: rect_w,
-                    height: area.height,
+                    x: col_x,
+                    y,
+                    width: col_w,
+                    height: h,
                 },
-            )
-        })
-        .collect()
+            ));
+            y += h;
+        }
+    }
+    out
 }
 
 pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> {
@@ -538,13 +559,13 @@ pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> 
             v
         }
         PaneLayout::Strip {
-            panes,
+            columns,
             column_width,
         } => strip_areas_at(
-            panes,
+            columns,
             *column_width,
             area,
-            strip_scroll_target(panes, *column_width, area, panes[0]),
+            strip_scroll_target(columns, *column_width, area, columns[0].panes[0]),
         ),
     }
 }
@@ -558,23 +579,31 @@ pub fn find_split_at_cursor(
     match node {
         PaneLayout::Leaf(_) => None,
         PaneLayout::Strip {
-            panes,
+            columns,
             column_width,
         } => {
-            let rects = strip_areas_at(panes, *column_width, area, 0);
+            let rects = strip_areas_at(columns, *column_width, area, 0);
             for w in rects.windows(2) {
-                let (left_id, left) = w[0];
-                let (right_id, right) = w[1];
-                if right.width == 0 || left.width == 0 {
+                let (a_id, a) = w[0];
+                let (b_id, b) = w[1];
+                if a.width == 0 || b.width == 0 {
                     continue;
                 }
-                let bx = right.x;
-                if row >= area.y
-                    && row < area.y + area.height
-                    && (bx == 0 || col + 1 >= bx)
-                    && col <= bx
-                {
-                    return Some((left_id, right_id, SplitDir::Horizontal));
+                // Same column stacked panes share an x and differ in y.
+                if a.x == b.x && a.y < b.y {
+                    let by = b.y;
+                    if col >= a.x && col < a.x + a.width && row + 1 >= by && row <= by {
+                        return Some((a_id, b_id, SplitDir::Vertical));
+                    }
+                    continue;
+                }
+                // Otherwise this is a column boundary, a vertical line at b.x.
+                if row < a.y || row >= b.y + b.height {
+                    continue;
+                }
+                let bx = b.x;
+                if col + 1 >= bx && col <= bx {
+                    return Some((a_id, b_id, SplitDir::Horizontal));
                 }
             }
             None
@@ -620,25 +649,27 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             render_single_pane(frame, area, *pid, app);
         }
         PaneLayout::Strip {
-            panes,
+            columns,
             column_width,
         } => {
-            let scroll = strip_scroll_target(panes, *column_width, area, app.active_pane);
-            let areas = strip_areas_at(panes, *column_width, area, scroll);
+            let scroll = strip_scroll_target(columns, *column_width, area, app.active_pane);
+            let areas = strip_areas_at(columns, *column_width, area, scroll);
             for (pid, rect) in &areas {
                 if rect.width > 0 {
                     render_single_pane(frame, *rect, *pid, app);
                 }
             }
             // Overflow chevrons tell the user the strip continues past the edge.
-            let content = (*column_width as usize) * panes.len();
+            let content = (*column_width as usize) * columns.len();
             let viewport = area.width as usize;
             let scrolled_right = content > viewport
                 && areas
-                    .last()
+                    .iter()
+                    .rev()
+                    .find(|(_, r)| r.width > 0)
                     .map(|(_, r)| r.x + r.width < area.x + area.width)
                     .unwrap_or(false);
-            if areas.first().map(|(_, r)| r.width == 0).unwrap_or(false) {
+            if areas.iter().any(|(_, r)| r.width == 0) {
                 frame.render_widget(
                     Paragraph::new("‹").style(Style::default().fg(accent_idle())),
                     Rect {
@@ -1506,44 +1537,40 @@ mod tests {
         assert_eq!(areas[1].1.width, 10);
     }
 
-    const STRIP: [PaneId; 4] = [PaneId(1), PaneId(2), PaneId(3), PaneId(4)];
     const W: u16 = 40;
 
-    fn scroll_for(focus: PaneId, area: Rect) -> usize {
-        strip_scroll_target(&STRIP, W, area, focus)
+    fn cols(n: usize) -> Vec<StripColumn> {
+        (1..=n)
+            .map(|i| StripColumn::single(PaneId(i as u32)))
+            .collect()
     }
 
-    fn visible_titles(areas: &[(PaneId, Rect)], area: Rect) -> Vec<(PaneId, u16)> {
-        areas
-            .iter()
-            .filter(|(_, r)| r.width > 0)
-            .map(|(p, r)| (*p, r.x - area.x))
-            .collect()
+    fn scroll_for(columns: &[StripColumn], area: Rect, focus: PaneId) -> usize {
+        strip_scroll_target(columns, W, area, focus)
     }
 
     #[test]
     fn strip_fits_without_scrolling() {
         let area = Rect::new(0, 0, 200, 10);
-        let scroll = scroll_for(PaneId(1), area);
+        let c = cols(4);
+        let scroll = scroll_for(&c, area, PaneId(1));
         assert_eq!(scroll, 0);
-        let areas = strip_areas_at(&STRIP, W, area, scroll);
-        assert_eq!(
-            visible_titles(&areas, area),
-            vec![
-                (PaneId(1), 0),
-                (PaneId(2), 40),
-                (PaneId(3), 80),
-                (PaneId(4), 120),
-            ]
-        );
+        let areas = strip_areas_at(&c, W, area, scroll);
+        assert_eq!(areas.len(), 4);
+        for (i, (_, r)) in areas.iter().enumerate() {
+            assert_eq!(r.x, i as u16 * 40, "column {i} x");
+            assert_eq!(
+                r.width, 40,
+                "column {i} keeps its width when the strip fits"
+            );
+            assert_eq!(r.height, area.height, "a lone pane fills its column");
+        }
     }
 
     #[test]
-    fn strip_lands_pane_boundaries_on_viewport_edges() {
+    fn strip_scroll_parks_the_focused_column_on_the_left() {
         let area = Rect::new(0, 0, 100, 10);
-        // Moving focus parks it against the left edge, so the viewport advances
-        // in whole columns. The only exception is the end of the content, where
-        // the maximum offset is whatever is left after the last full pane.
+        let c = cols(4);
         let max_scroll = 4 * W as usize - area.width as usize;
         for (focus, want) in [
             (PaneId(1), 0usize),
@@ -1551,50 +1578,78 @@ mod tests {
             (PaneId(3), 60),
             (PaneId(4), 60),
         ] {
-            let scroll = scroll_for(focus, area);
-            assert_eq!(scroll, want, "scroll for pane {focus:?}");
-            let on_boundary = scroll % W as usize == 0;
+            let scroll = scroll_for(&c, area, focus);
+            assert_eq!(scroll, want, "scroll for {focus:?}");
             assert!(
-                on_boundary || scroll == max_scroll,
-                "offset {scroll} for {focus:?} is neither a column boundary nor the end of the content"
+                scroll % W as usize == 0 || scroll == max_scroll,
+                "offset {scroll} is neither a column boundary nor the end of the content"
             );
         }
     }
 
     #[test]
-    fn strip_focused_pane_is_always_fully_visible() {
+    fn column_stacks_panes_and_fills_the_height() {
+        let area = Rect::new(0, 0, 100, 21);
+        let c = vec![StripColumn {
+            panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+        }];
+        let areas = strip_areas_at(&c, W, area, 0);
+        assert_eq!(areas.len(), 3, "every pane in the column gets a rect");
+        let rects: Vec<Rect> = areas.iter().map(|(_, r)| *r).collect();
+        assert_eq!(rects[0].x, rects[1].x, "all share the column x");
+        assert_eq!(rects[1].x, rects[2].x);
+        assert_eq!(rects[0].y, area.y, "first pane starts at the top");
+        assert_eq!(
+            rects[2].y + rects[2].height,
+            area.y + area.height,
+            "last pane ends flush with the bottom"
+        );
+        // Rows must tile exactly: no gaps, no overlap.
+        let summed: u16 = rects.iter().map(|r| r.height).sum();
+        assert_eq!(summed, area.height, "heights sum to the column height");
+        for w in rects.windows(2) {
+            assert_eq!(w[0].y + w[0].height, w[1].y, "rows are contiguous");
+        }
+    }
+
+    #[test]
+    fn column_height_split_handles_remainder() {
+        // 10 rows across 3 panes cannot divide evenly; the remainder must go
+        // somewhere rather than leaving a gap.
         let area = Rect::new(0, 0, 100, 10);
-        for focus in [PaneId(1), PaneId(2), PaneId(3), PaneId(4)] {
-            let scroll = scroll_for(focus, area);
-            let areas = strip_areas_at(&STRIP, W, area, scroll);
-            let r = areas.iter().find(|(p, _)| *p == focus).unwrap().1;
-            assert_eq!(r.width, W, "pane {focus:?} is never clipped");
-            assert!(r.x >= area.x && r.x + r.width <= area.x + area.width);
+        let c = vec![StripColumn {
+            panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+        }];
+        let areas = strip_areas_at(&c, W, area, 0);
+        let rects: Vec<Rect> = areas.iter().map(|(_, r)| *r).collect();
+        let summed: u16 = rects.iter().map(|r| r.height).sum();
+        assert_eq!(summed, 10);
+        for w in rects.windows(2) {
+            assert_eq!(w[0].y + w[0].height, w[1].y);
         }
     }
 
     #[test]
     fn strip_scroll_is_clamped_to_content() {
         let area = Rect::new(0, 0, 100, 10);
-        let s = strip_scroll_target(&STRIP, W, area, PaneId(4));
+        let c = cols(4);
+        let s = scroll_for(&c, area, PaneId(4));
         assert!(s <= 60, "content is 160 columns so scroll cannot exceed 60");
-        let areas = strip_areas_at(&STRIP, W, area, s);
+        let areas = strip_areas_at(&c, W, area, s);
         let last = areas[3].1;
         assert!(last.x + last.width <= area.x + area.width);
     }
 
     #[test]
-    fn strip_wider_than_viewport_keeps_focus_trailing_edge_visible() {
-        // Column wider than the viewport: the pane cannot fit, so the trailing
-        // edge is what must stay on screen.
-        let wide = [PaneId(1), PaneId(2)];
-        let area = Rect::new(0, 0, 30, 10);
-        let scroll = strip_scroll_target(&wide, 40, area, PaneId(1));
-        let areas = strip_areas_at(&wide, 40, area, scroll);
-        let r = areas[0].1;
-        assert!(
-            r.x + r.width <= area.x + area.width,
-            "trailing edge on screen"
-        );
+    fn focused_pane_is_always_fully_visible() {
+        let area = Rect::new(0, 0, 100, 10);
+        let c = cols(4);
+        for focus in [PaneId(1), PaneId(2), PaneId(3), PaneId(4)] {
+            let scroll = scroll_for(&c, area, focus);
+            let areas = strip_areas_at(&c, W, area, scroll);
+            let r = areas.iter().find(|(p, _)| *p == focus).unwrap().1;
+            assert_eq!(r.width, W, "pane {focus:?} is never clipped horizontally");
+            assert!(r.x >= area.x && r.x + r.width <= area.x + area.width);
+        }
     }
 }
