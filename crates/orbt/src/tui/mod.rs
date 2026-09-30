@@ -449,17 +449,13 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
     );
 }
 
-/// Scroll offset that brings `focus` into view with the smallest possible move.
-///
-/// Keeping the viewport still while the focus is already visible is what makes
-/// strip navigation feel stable: crossing to an adjacent pane does not shift
-/// the screen, and only a focus that has actually left the viewport scrolls it.
+/// Scroll offset that shows `focus` with every pane boundary lined up on a
+/// pane edge.
 pub fn strip_scroll_target(
     panes: &[PaneId],
     column_width: u16,
     area: Rect,
     focus: PaneId,
-    current: usize,
 ) -> usize {
     if panes.is_empty() {
         return 0;
@@ -471,20 +467,19 @@ pub fn strip_scroll_target(
         return 0;
     }
     let max_scroll = total - viewport;
-    let scroll = current.min(max_scroll);
 
     let focus_idx = panes.iter().position(|&p| p == focus).unwrap_or(0);
     let focus_start = focus_idx * width;
     let focus_end = focus_start + width;
 
-    if focus_start < scroll {
-        // Focus sits left of the viewport: pull it flush with the left edge.
-        focus_start
-    } else if focus_end > scroll + viewport {
-        // Focus extends past the right edge: push it flush with the right edge.
+    if width >= viewport {
+        // The focused pane is wider than the viewport; keep its trailing edge in view.
         (focus_end - viewport).min(max_scroll)
     } else {
-        scroll
+        // Park the focused pane against the left edge. This keeps every pane
+        // boundary aligned to a pane rather than leaving a permanently
+        // half-clipped pane hanging off the left of the screen.
+        focus_start.min(max_scroll)
     }
 }
 
@@ -549,13 +544,7 @@ pub fn compute_leaf_areas(node: &PaneLayout, area: Rect) -> Vec<(PaneId, Rect)> 
             panes,
             *column_width,
             area,
-            strip_scroll_target(
-                panes,
-                *column_width,
-                area,
-                panes.first().copied().unwrap_or(PaneId(0)),
-                0,
-            ),
+            strip_scroll_target(panes, *column_width, area, panes[0]),
         ),
     }
 }
@@ -634,14 +623,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             panes,
             column_width,
         } => {
-            let scroll = strip_scroll_target(
-                panes,
-                *column_width,
-                area,
-                app.active_pane,
-                app.strip_scroll.get(),
-            );
-            app.strip_scroll.set(scroll);
+            let scroll = strip_scroll_target(panes, *column_width, area, app.active_pane);
             let areas = strip_areas_at(panes, *column_width, area, scroll);
             for (pid, rect) in &areas {
                 if rect.width > 0 {
@@ -757,7 +739,7 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App)
         .map(|i| i + 1)
         .unwrap_or(1);
 
-    let border_color = if is_active { accent() } else { border() };
+    let border_color = if is_active { accent() } else { border_dim() };
 
     // Position within the strip, so a scrolled-away pane is still identifiable.
     let title = if total > 1 {
@@ -1267,10 +1249,11 @@ mod tests {
         let corner_fg = cell_fg_at(&terminal, 24, 1);
         assert_eq!(corner_fg, accent()); // active pane border = accent (orange) color
 
-        // The inactive pane (PaneId 2) should use the default border color.
+        // The inactive pane (PaneId 2) should use the dimmed border colour so it
+        // stays readable without competing with the focused pane.
         // It starts at ~x=72 in a 120-col terminal (sidebar=24, first pane half=48).
         let inactive_corner_fg = cell_fg_at(&terminal, 72, 1);
-        assert_eq!(inactive_corner_fg, border()); // inactive pane = border color
+        assert_eq!(inactive_corner_fg, border_dim());
     }
 
     #[test]
@@ -1526,87 +1509,92 @@ mod tests {
     const STRIP: [PaneId; 4] = [PaneId(1), PaneId(2), PaneId(3), PaneId(4)];
     const W: u16 = 40;
 
-    fn scroll_for(focus: PaneId, area: Rect, current: usize) -> usize {
-        strip_scroll_target(&STRIP, W, area, focus, current)
+    fn scroll_for(focus: PaneId, area: Rect) -> usize {
+        strip_scroll_target(&STRIP, W, area, focus)
+    }
+
+    fn visible_titles(areas: &[(PaneId, Rect)], area: Rect) -> Vec<(PaneId, u16)> {
+        areas
+            .iter()
+            .filter(|(_, r)| r.width > 0)
+            .map(|(p, r)| (*p, r.x - area.x))
+            .collect()
     }
 
     #[test]
     fn strip_fits_without_scrolling() {
         let area = Rect::new(0, 0, 200, 10);
-        let scroll = scroll_for(PaneId(1), area, 0);
+        let scroll = scroll_for(PaneId(1), area);
         assert_eq!(scroll, 0);
         let areas = strip_areas_at(&STRIP, W, area, scroll);
-        assert_eq!(areas.len(), 4);
-        for (i, (_, r)) in areas.iter().enumerate() {
-            assert_eq!(r.x, i as u16 * 40, "pane {i} x");
-            assert_eq!(r.width, 40, "pane {i} keeps its width when the strip fits");
+        assert_eq!(
+            visible_titles(&areas, area),
+            vec![
+                (PaneId(1), 0),
+                (PaneId(2), 40),
+                (PaneId(3), 80),
+                (PaneId(4), 120),
+            ]
+        );
+    }
+
+    #[test]
+    fn strip_lands_pane_boundaries_on_viewport_edges() {
+        let area = Rect::new(0, 0, 100, 10);
+        // Moving focus parks it against the left edge, so the viewport advances
+        // in whole columns. The only exception is the end of the content, where
+        // the maximum offset is whatever is left after the last full pane.
+        let max_scroll = 4 * W as usize - area.width as usize;
+        for (focus, want) in [
+            (PaneId(1), 0usize),
+            (PaneId(2), 40),
+            (PaneId(3), 60),
+            (PaneId(4), 60),
+        ] {
+            let scroll = scroll_for(focus, area);
+            assert_eq!(scroll, want, "scroll for pane {focus:?}");
+            let on_boundary = scroll % W as usize == 0;
+            assert!(
+                on_boundary || scroll == max_scroll,
+                "offset {scroll} for {focus:?} is neither a column boundary nor the end of the content"
+            );
         }
     }
 
     #[test]
-    fn strip_viewport_stays_put_while_focus_is_visible() {
+    fn strip_focused_pane_is_always_fully_visible() {
         let area = Rect::new(0, 0, 100, 10);
-        // Scrolled to show panes 1..3; panes 2 and 3 are fully inside it.
-        let start = scroll_for(PaneId(2), area, 0);
-        assert_eq!(start, 0, "focusing the first pane needs no scroll");
-        let mid = scroll_for(PaneId(2), area, 40);
-        assert_eq!(mid, 40, "focus inside the viewport leaves it alone");
-        assert_eq!(
-            scroll_for(PaneId(3), area, 40),
-            40,
-            "moving to a pane still fully visible does not shift the viewport"
-        );
-    }
-
-    #[test]
-    fn strip_scrolls_only_as_far_as_needed() {
-        let area = Rect::new(0, 0, 100, 10);
-        // Last pane starts at 120 and ends at 160; the viewport is 100 wide.
-        let s = scroll_for(PaneId(4), area, 0);
-        assert_eq!(s, 60, "scrolls just enough to flush the focus to the right");
-        let areas = strip_areas_at(&STRIP, W, area, s);
-        let last = areas[3].1;
-        assert_eq!(
-            last.x + last.width,
-            100,
-            "focus ends flush with the right edge"
-        );
-    }
-
-    #[test]
-    fn strip_scroll_back_to_first_pane_is_flush_left() {
-        let area = Rect::new(0, 0, 100, 10);
-        let s = strip_scroll_target(&STRIP, W, area, PaneId(1), 60);
-        assert_eq!(s, 0, "focus is pulled flush to the left edge");
-        let areas = strip_areas_at(&STRIP, W, area, s);
-        assert_eq!(areas[0].1.x, 0);
-        assert_eq!(areas[0].1.width, 40, "the focused pane is fully visible");
+        for focus in [PaneId(1), PaneId(2), PaneId(3), PaneId(4)] {
+            let scroll = scroll_for(focus, area);
+            let areas = strip_areas_at(&STRIP, W, area, scroll);
+            let r = areas.iter().find(|(p, _)| *p == focus).unwrap().1;
+            assert_eq!(r.width, W, "pane {focus:?} is never clipped");
+            assert!(r.x >= area.x && r.x + r.width <= area.x + area.width);
+        }
     }
 
     #[test]
     fn strip_scroll_is_clamped_to_content() {
         let area = Rect::new(0, 0, 100, 10);
-        // Content is 160 columns, so scroll can never exceed 60.
-        let s = strip_scroll_target(&STRIP, W, area, PaneId(4), 999);
-        assert!(s <= 60, "scroll stays inside the content, got {s}");
+        let s = strip_scroll_target(&STRIP, W, area, PaneId(4));
+        assert!(s <= 60, "content is 160 columns so scroll cannot exceed 60");
+        let areas = strip_areas_at(&STRIP, W, area, s);
+        let last = areas[3].1;
+        assert!(last.x + last.width <= area.x + area.width);
     }
 
     #[test]
-    fn strip_focus_stays_put_when_other_panes_close() {
-        let area = Rect::new(0, 0, 100, 10);
-        let before_scroll = scroll_for(PaneId(4), area, 0);
-        let before = strip_areas_at(&STRIP, W, area, before_scroll);
-
-        // Pane 1 closes while pane 4 holds focus. The strip shrinks by one
-        // column, so the viewport must give back the same amount or the
-        // focused pane would slide across the screen.
-        let remaining = [PaneId(2), PaneId(3), PaneId(4)];
-        let after_scroll = strip_scroll_target(&remaining, W, area, PaneId(4), before_scroll);
-        let after = strip_areas_at(&remaining, W, area, after_scroll);
-
-        assert_eq!(
-            after[2].1.x, before[3].1.x,
-            "viewport compensates, so the focused pane does not move on screen"
+    fn strip_wider_than_viewport_keeps_focus_trailing_edge_visible() {
+        // Column wider than the viewport: the pane cannot fit, so the trailing
+        // edge is what must stay on screen.
+        let wide = [PaneId(1), PaneId(2)];
+        let area = Rect::new(0, 0, 30, 10);
+        let scroll = strip_scroll_target(&wide, 40, area, PaneId(1));
+        let areas = strip_areas_at(&wide, 40, area, scroll);
+        let r = areas[0].1;
+        assert!(
+            r.x + r.width <= area.x + area.width,
+            "trailing edge on screen"
         );
     }
 }

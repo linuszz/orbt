@@ -704,11 +704,6 @@ pub struct App {
     /// When set, this pane is rendered alone at full size. The server-side
     /// PaneLayout tree is untouched; other panes keep running, just hidden.
     pub zoomed_pane: Option<PaneId>,
-    /// Scroll offset of the active tab's strip, in columns. A `Cell` because the
-    /// draw path only has `&App` yet must carry the offset forward between
-    /// frames; recomputing from scratch each frame would collapse the minimal
-    /// scroll back into a re-centring jump.
-    pub strip_scroll: std::cell::Cell<usize>,
     pub theme_name: String,
     /// Runtime copy of `UserSettings::agent_fleet_enabled`. Set at startup, fixed for the session.
     pub agent_fleet_enabled: bool,
@@ -918,7 +913,6 @@ impl App {
             drag_tab: None,
             drag_split: None,
             zoomed_pane: None,
-            strip_scroll: std::cell::Cell::new(0),
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,
             layout_mode: LayoutMode::Bsp,

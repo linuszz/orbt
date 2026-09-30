@@ -14,6 +14,9 @@ pub struct ThemeColors {
     pub accent_blocked: Color,
     pub accent_error: Color,
     pub border: Color,
+    /// Border for panes that are not focused. Kept noticeably lighter than
+    /// `border` so the pane edges stay readable against `bg_primary`.
+    pub border_dim: Color,
 }
 
 impl ThemeColors {
@@ -33,6 +36,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(224, 175, 104),
             accent_error: Color::Rgb(247, 118, 142),
             border: Color::Rgb(45, 48, 70),
+            border_dim: Color::Rgb(92, 99, 140),
         }
     }
 
@@ -52,6 +56,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(217, 172, 0),
             accent_error: Color::Rgb(200, 50, 30),
             border: Color::Rgb(60, 60, 76),
+            border_dim: Color::Rgb(110, 110, 132),
         }
     }
 
@@ -71,6 +76,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(249, 226, 175),
             accent_error: Color::Rgb(243, 139, 168),
             border: Color::Rgb(54, 58, 79),
+            border_dim: Color::Rgb(104, 110, 140),
         }
     }
 
@@ -90,6 +96,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(254, 128, 25),
             accent_error: Color::Rgb(251, 73, 52),
             border: Color::Rgb(80, 73, 69),
+            border_dim: Color::Rgb(140, 130, 122),
         }
     }
 
@@ -109,6 +116,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(235, 203, 139),
             accent_error: Color::Rgb(191, 97, 106),
             border: Color::Rgb(76, 86, 106),
+            border_dim: Color::Rgb(132, 143, 165),
         }
     }
 
@@ -128,6 +136,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(255, 184, 108),
             accent_error: Color::Rgb(255, 85, 85),
             border: Color::Rgb(68, 71, 90),
+            border_dim: Color::Rgb(122, 126, 150),
         }
     }
 
@@ -147,6 +156,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(181, 137, 0),
             accent_error: Color::Rgb(220, 50, 47),
             border: Color::Rgb(7, 54, 66),
+            border_dim: Color::Rgb(70, 130, 145),
         }
     }
 
@@ -166,6 +176,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(229, 192, 123),
             accent_error: Color::Rgb(224, 108, 117),
             border: Color::Rgb(58, 64, 74),
+            border_dim: Color::Rgb(108, 116, 132),
         }
     }
 
@@ -185,6 +196,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(219, 188, 127),
             accent_error: Color::Rgb(230, 126, 128),
             border: Color::Rgb(74, 84, 68),
+            border_dim: Color::Rgb(128, 140, 118),
         }
     }
 
@@ -204,6 +216,7 @@ impl ThemeColors {
             accent_blocked: Color::Rgb(196, 169, 125),
             accent_error: Color::Rgb(195, 95, 103),
             border: Color::Rgb(54, 54, 68),
+            border_dim: Color::Rgb(102, 102, 122),
         }
     }
 }
@@ -280,4 +293,8 @@ pub fn accent_error() -> Color {
 }
 pub fn border() -> Color {
     CURRENT.with(|c| c.borrow().border)
+}
+
+pub fn border_dim() -> Color {
+    CURRENT.with(|c| c.borrow().border_dim)
 }
