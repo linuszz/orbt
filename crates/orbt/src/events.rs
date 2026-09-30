@@ -142,6 +142,34 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
             app.selection = None;
             app.mode = InputMode::Scroll { offset: 1 };
         }
+        "pane_left" | "pane_right" => {
+            let _ = writer
+                .send(ClientMessage::SwapPane {
+                    tab_id: app.active_tab_id,
+                    pane: app.active_pane,
+                    towards_left: id == "pane_left",
+                })
+                .await;
+        }
+        "wider_column" | "narrower_column" => {
+            let step: i16 = if id == "wider_column" { 8 } else { -8 };
+            let mut width = None;
+            if let Some(tab) = app.tabs.get_mut(app.active_tab) {
+                if let Some((_, current)) = tab.pane_tree.as_strip() {
+                    let next = ((current as i16 + step).clamp(20, 400)) as u16;
+                    tab.pane_tree.set_column_width(next);
+                    width = Some(next);
+                }
+            }
+            if let Some(width) = width {
+                let _ = writer
+                    .send(ClientMessage::SetColumnWidth {
+                        tab_id: app.active_tab_id,
+                        width,
+                    })
+                    .await;
+            }
+        }
         "new_tab" => {
             let _ = writer
                 .send(ClientMessage::NewTab {
@@ -3016,30 +3044,66 @@ async fn handle_mouse(
             if pane_area.width == 0 || pane_area.height == 0 {
                 return;
             }
+            let is_strip = app.tabs[app.active_tab].pane_tree.as_strip().is_some();
             let drag_update = if let Some(drag) = app.drag_split.as_mut() {
-                let ratio = match drag.2 {
-                    orbt_protocol::SplitDir::Horizontal => {
-                        let total = pane_area.width as f32;
-                        ((mouse.column as f32 - pane_area.x as f32) / total).clamp(0.1, 0.9)
+                if is_strip {
+                    let width =
+                        (mouse.column.saturating_sub(pane_area.x) + 1).clamp(20, 400) as f32;
+                    if (width - drag.3).abs() >= 1.0 {
+                        drag.3 = width;
+                        Some((drag.0, drag.1, width))
+                    } else {
+                        None
                     }
-                    orbt_protocol::SplitDir::Vertical => {
-                        let total = pane_area.height as f32;
-                        ((mouse.row as f32 - pane_area.y as f32) / total).clamp(0.1, 0.9)
-                    }
-                };
-                if (ratio - drag.3).abs() >= 0.02 {
-                    drag.3 = ratio;
-                    Some((drag.0, drag.1, ratio))
                 } else {
-                    None
+                    let ratio = match drag.2 {
+                        orbt_protocol::SplitDir::Horizontal => {
+                            let total = pane_area.width as f32;
+                            ((mouse.column as f32 - pane_area.x as f32) / total).clamp(0.1, 0.9)
+                        }
+                        orbt_protocol::SplitDir::Vertical => {
+                            let total = pane_area.height as f32;
+                            ((mouse.row as f32 - pane_area.y as f32) / total).clamp(0.1, 0.9)
+                        }
+                    };
+                    if (ratio - drag.3).abs() >= 0.02 {
+                        drag.3 = ratio;
+                        Some((drag.0, drag.1, ratio))
+                    } else {
+                        None
+                    }
                 }
             } else {
                 None
             };
-            if let Some((first_pane, second_pane, ratio)) = drag_update {
-                if let Some(tab) = app.tabs.get_mut(app.active_tab) {
-                    tab.pane_tree
-                        .set_split_ratio(first_pane, second_pane, ratio);
+            if let Some((first_pane, second_pane, value)) = drag_update {
+                if is_strip {
+                    // Strips share one column width; derive it from where the
+                    // shared edge now sits rather than from a viewport ratio.
+                    let width = value as u16;
+                    if let Some(tab) = app.tabs.get_mut(app.active_tab) {
+                        tab.pane_tree.set_column_width(width);
+                    }
+                    let _ = writer
+                        .send(ClientMessage::SetColumnWidth {
+                            tab_id: app.active_tab_id,
+                            width,
+                        })
+                        .await;
+                } else {
+                    let ratio = value;
+                    if let Some(tab) = app.tabs.get_mut(app.active_tab) {
+                        tab.pane_tree
+                            .set_split_ratio(first_pane, second_pane, ratio);
+                    }
+                    let _ = writer
+                        .send(ClientMessage::ResizeSplit {
+                            tab_id: app.active_tab_id,
+                            first_pane,
+                            second_pane,
+                            ratio,
+                        })
+                        .await;
                 }
                 resize_local_grids(app, term_size.width, term_size.height);
                 app.needs_redraw = true;

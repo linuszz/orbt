@@ -424,6 +424,30 @@ pub static COMMANDS: &[CommandDef] = &[
         group: "Pane",
         shortcut: "[",
     },
+    CommandDef {
+        id: "pane_left",
+        label: "Move Pane Left",
+        group: "Pane",
+        shortcut: "H",
+    },
+    CommandDef {
+        id: "pane_right",
+        label: "Move Pane Right",
+        group: "Pane",
+        shortcut: "L",
+    },
+    CommandDef {
+        id: "wider_column",
+        label: "Wider Column",
+        group: "Pane",
+        shortcut: ">",
+    },
+    CommandDef {
+        id: "narrower_column",
+        label: "Narrower Column",
+        group: "Pane",
+        shortcut: "<",
+    },
     // tmux: c = new window, n/p = next/prev, l = last
     CommandDef {
         id: "new_tab",

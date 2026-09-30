@@ -90,6 +90,18 @@ pub enum ClientMessage {
         second_pane: crate::PaneId,
         ratio: f32,
     },
+    /// Set the shared column width of a strip layout. Ignored on split trees,
+    /// which use `ResizeSplit` ratios instead.
+    SetColumnWidth {
+        tab_id: crate::TabId,
+        width: u16,
+    },
+    /// Move `pane` one slot left (towards index 0) or right in its tab.
+    SwapPane {
+        tab_id: crate::TabId,
+        pane: crate::PaneId,
+        towards_left: bool,
+    },
 
     PaneInput {
         tab_id: crate::TabId,

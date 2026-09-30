@@ -485,6 +485,30 @@ impl SessionState {
             .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
     }
 
+    pub async fn set_column_width(&self, tab_id: TabId, width: u16) {
+        {
+            let mut tabs = self.tabs.write().await;
+            if let Some(tab) = tabs.get_mut(&tab_id) {
+                tab.layout.set_column_width(width);
+            }
+        }
+        let _ = self
+            .event_bus
+            .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
+    }
+
+    pub async fn swap_pane(&self, tab_id: TabId, pane: PaneId, towards_left: bool) {
+        {
+            let mut tabs = self.tabs.write().await;
+            if let Some(tab) = tabs.get_mut(&tab_id) {
+                tab.layout.swap_pane(pane, towards_left);
+            }
+        }
+        let _ = self
+            .event_bus
+            .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
+    }
+
     pub async fn resize_split(
         &self,
         _tab_id: TabId,
@@ -898,7 +922,7 @@ impl SessionState {
                         .map(|p| proc_cwd(p, &self.cwd))
                         .unwrap_or_else(|| self.cwd.clone());
 
-                    let g = entry.vt_parser.lock().unwrap();
+                    let g = entry.vt_parser.lock().unwrap_or_else(|e| e.into_inner());
                     let grid = &g.grid;
                     pane_infos.push(PaneInfo {
                         id: pid,
@@ -1324,8 +1348,8 @@ impl SpaceManager {
     /// the configured layout is lossless: `Leaf` and a one-entry `Strip` render
     /// identically. Tabs the user already split keep their current layout.
     pub async fn apply_tab_layout(&self, layout: TabLayout) {
-        let spaces = self.spaces.read().await;
-        for session in spaces.values() {
+        let sessions: Vec<_> = self.spaces.read().await.values().cloned().collect();
+        for session in sessions {
             let mut tabs = session.tabs.write().await;
             for tab in tabs.values_mut() {
                 let PaneLayout::Leaf(only) = tab.layout else {
@@ -1363,6 +1387,48 @@ impl SpaceManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Regression: apply_tab_layout used to hold the `spaces` read lock while
+    /// awaiting each session's `tabs` write lock, deadlocking against any code
+    /// path that takes them in the opposite order. Two spaces make that
+    /// ordering observable.
+    #[tokio::test]
+    async fn apply_tab_layout_completes_with_multiple_spaces() {
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(64);
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let mgr = SpaceManager::new(event_bus, shell, "/tmp".into(), 80, 24)
+            .await
+            .expect("space manager");
+        mgr.create_space(Some("second".into()))
+            .await
+            .expect("create space");
+
+        let apply = mgr.apply_tab_layout(TabLayout::Strip);
+        tokio::time::timeout(std::time::Duration::from_secs(5), apply)
+            .await
+            .expect("apply_tab_layout must not deadlock");
+
+        let state = mgr.collect_full_state().await;
+        assert_eq!(state.spaces.len(), 2);
+        for space in &state.spaces {
+            for tab in &space.tabs {
+                assert!(
+                    matches!(tab.layout, PaneLayout::Strip { .. }),
+                    "every space's initial tab adopts the layout, got {:?}",
+                    tab.layout
+                );
+            }
+        }
+    }
 
     #[tokio::test]
     async fn apply_tab_layout_retags_only_single_pane_tabs() {

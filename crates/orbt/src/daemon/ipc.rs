@@ -140,6 +140,18 @@ where
                         let session = space_manager.active_session().await;
                         session.resize_split(tab_id, first_pane, second_pane, ratio).await;
                     }
+                    ClientMessage::SetColumnWidth { tab_id, width } => {
+                        let session = space_manager.active_session().await;
+                        session.set_column_width(tab_id, width).await;
+                    }
+                    ClientMessage::SwapPane {
+                        tab_id,
+                        pane,
+                        towards_left,
+                    } => {
+                        let session = space_manager.active_session().await;
+                        session.swap_pane(tab_id, pane, towards_left).await;
+                    }
                     ClientMessage::RequestFullState => {
                         let s = space_manager.collect_full_state().await;
                         let _ = write_msg(&mut stream, &ServerEvent::Welcome {

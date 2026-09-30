@@ -327,10 +327,10 @@ impl PaneLayout {
                 if !adjacent {
                     return false;
                 }
-                // Every pane in a strip shares one width, so dragging the shared
-                // edge just rescales the whole column.
-                *column_width = ((*column_width as f32 * ratio) as u16).clamp(20, 400);
-                true
+                // Strips resize by absolute width, not by ratio. The caller
+                // sends SetColumnWidth; ignore the ratio here.
+                let _ = column_width;
+                false
             }
         }
     }
@@ -439,6 +439,27 @@ impl PaneLayout {
             _ => false,
         }
     }
+
+    /// Swap `pane` with its neighbour in a strip. Returns false on split trees
+    /// and at the ends of the strip, where there is nothing to swap with.
+    pub fn swap_pane(&mut self, pane: PaneId, towards_left: bool) -> bool {
+        let PaneLayout::Strip { panes, .. } = self else {
+            return false;
+        };
+        let Some(idx) = panes.iter().position(|&p| p == pane) else {
+            return false;
+        };
+        let neighbour: Option<usize> = if towards_left {
+            idx.checked_sub(1)
+        } else {
+            panes.get(idx + 1).map(|_| idx + 1)
+        };
+        let Some(other) = neighbour else {
+            return false;
+        };
+        panes.swap(idx, other);
+        true
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -501,6 +522,68 @@ pub struct ScrollbackLine {
     pub cells: Vec<Cell>,
     pub width: u16,
     pub seq: u64,
+}
+
+#[test]
+fn strip_swap_moves_pane_between_slots() {
+    let mut layout = PaneLayout::Strip {
+        panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+        column_width: 80,
+    };
+    assert!(layout.swap_pane(PaneId(2), true));
+    assert_eq!(layout.leaves(), vec![PaneId(2), PaneId(1), PaneId(3)]);
+
+    assert!(layout.swap_pane(PaneId(1), false));
+    assert_eq!(layout.leaves(), vec![PaneId(2), PaneId(3), PaneId(1)]);
+
+    // Ends of the strip have no neighbour.
+    assert!(!layout.swap_pane(PaneId(2), true));
+    assert!(!layout.swap_pane(PaneId(1), false));
+    // Unknown pane is a no-op, not a panic.
+    assert!(!layout.swap_pane(PaneId(99), true));
+}
+
+#[test]
+fn strip_column_width_clamps_and_ignores_split_trees() {
+    let mut strip = PaneLayout::Strip {
+        panes: vec![PaneId(1)],
+        column_width: 80,
+    };
+    assert!(strip.set_column_width(120));
+    assert_eq!(strip.as_strip().map(|(_, w)| w), Some(120));
+    assert!(strip.set_column_width(5));
+    assert_eq!(
+        strip.as_strip().map(|(_, w)| w),
+        Some(20),
+        "clamped up to the minimum"
+    );
+    assert!(strip.set_column_width(9999));
+    assert_eq!(
+        strip.as_strip().map(|(_, w)| w),
+        Some(400),
+        "clamped down to the maximum"
+    );
+
+    let mut tree = PaneLayout::Split {
+        direction: SplitDir::Horizontal,
+        first: Box::new(PaneLayout::Leaf(PaneId(1))),
+        second: Box::new(PaneLayout::Leaf(PaneId(2))),
+        ratio: 0.5,
+    };
+    assert!(!tree.set_column_width(100));
+    assert!(!tree.swap_pane(PaneId(1), true));
+}
+
+#[test]
+fn strip_ratio_resize_is_a_no_op() {
+    // Strips size by absolute width; ResizeSplit must not quietly scale
+    // the column by the drag ratio.
+    let mut strip = PaneLayout::Strip {
+        panes: vec![PaneId(1), PaneId(2)],
+        column_width: 80,
+    };
+    assert!(!strip.set_split_ratio(PaneId(1), PaneId(2), 0.9));
+    assert_eq!(strip.as_strip().map(|(_, w)| w), Some(80));
 }
 
 #[cfg(test)]
