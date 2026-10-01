@@ -595,6 +595,9 @@ pub static COMMANDS: &[CommandDef] = &[
 pub struct PaneState {
     pub parser: VtParser,
     pub scrollback: VecDeque<Vec<Cell>>,
+    /// Where the process in this pane is working, as last reported by the
+    /// daemon. A pane is identified by this far more often than by its contents.
+    pub cwd: String,
 }
 
 const SCROLLBACK_CAP: usize = 10_000;
@@ -604,6 +607,7 @@ impl PaneState {
         Self {
             parser: VtParser::new(cols, rows),
             scrollback: VecDeque::with_capacity(SCROLLBACK_CAP),
+            cwd: String::new(),
         }
     }
 
@@ -837,6 +841,7 @@ impl App {
                 ps.parser.grid.mouse_reporting = pane.cell_grid.mouse_reporting;
                 ps.parser.grid.mouse_sgr = pane.cell_grid.mouse_sgr;
                 ps.parser.grid.resize(cols, rows);
+                ps.cwd = pane.cwd.clone();
                 panes.insert(pane.id, ps);
             }
 
@@ -1389,6 +1394,7 @@ impl App {
                         // and cursor state (updated live via PaneOutput). Only sync grid
                         // dimensions so a resize is reflected without clobbering VT state.
                         if let Some(existing) = self.panes.get_mut(&pane.id) {
+                            existing.cwd = pane.cwd.clone();
                             let new_cols = pane.cell_grid.cols.max(1);
                             let new_rows = pane.cell_grid.rows.max(1);
                             if existing.parser.grid.cols != new_cols
@@ -1401,6 +1407,7 @@ impl App {
                         let mut ps =
                             PaneState::new(pane.cell_grid.cols.max(1), pane.cell_grid.rows.max(1));
                         ps.sync_from_server(&pane.cell_grid);
+                        ps.cwd = pane.cwd.clone();
                         self.panes.insert(pane.id, ps);
 
                         if let Some((target, dir)) = self.pending_split.take() {

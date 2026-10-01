@@ -147,8 +147,13 @@ fn render_card(
 
     // Terminal text cannot be scaled down to a thumbnail, so a card says what
     // the pane is for instead of pretending to show it.
+    let where_ = app
+        .panes
+        .get(&card.pane)
+        .map(|p| p.cwd.as_str())
+        .unwrap_or_default();
     lines.push(Line::from(Span::styled(
-        "shell",
+        fit_cwd(where_, inner.width),
         Style::default().fg(fg_secondary()),
     )));
 
@@ -190,6 +195,34 @@ fn agent_line(app: &App, pane: PaneId) -> Option<Vec<Span<'static>>> {
             Style::default().fg(colour).add_modifier(Modifier::BOLD),
         ),
     ])
+}
+
+/// Show the end of a path, which is the part that identifies it, truncated to
+/// whatever the card can hold.
+pub fn fit_cwd(cwd: &str, width: u16) -> String {
+    if cwd.is_empty() {
+        return "—".to_string();
+    }
+    let room = width.max(2) as usize;
+    let trimmed = cwd.trim_end_matches('/');
+    if trimmed.is_empty() {
+        return "/".to_string();
+    }
+    if trimmed.chars().count() <= room {
+        return trimmed.to_string();
+    }
+    let chars: Vec<char> = trimmed.chars().collect();
+    let keep = room - 1;
+    let start = chars.len().saturating_sub(keep);
+    let mut tail: String = chars[start..].iter().collect();
+    // Cut at a separator where one is close by, so the tail still reads as a
+    // path rather than as the tail of a word.
+    if start > 0 && !tail.starts_with('/') {
+        if let Some(cut) = tail.find('/') {
+            tail = tail[cut..].to_string();
+        }
+    }
+    format!("…{tail}")
 }
 
 pub fn card_at(cards: &[Card], col: u16, row: u16) -> Option<PaneId> {
@@ -293,6 +326,18 @@ mod tests {
             "clicking a card focuses that pane"
         );
         assert_eq!(card_at(&cards, third.x - 1, third.y), None);
+    }
+
+    #[test]
+    fn a_long_path_is_shown_from_its_end() {
+        assert_eq!(
+            fit_cwd("/a/very/deeply/nested/project/directory", 12),
+            "…/directory",
+            "the tail keeps its separator so it still reads as a path"
+        );
+        assert_eq!(fit_cwd("/home/linus", 40), "/home/linus");
+        assert_eq!(fit_cwd("/", 10), "/", "the root is still a path");
+        assert_eq!(fit_cwd("", 10), "—", "an unknown cwd is not a blank row");
     }
 
     #[test]
