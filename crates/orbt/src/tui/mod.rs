@@ -193,7 +193,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let rows = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Fill(1),
-        ratatui::layout::Constraint::Length(strip_nav_height(app)),
+        ratatui::layout::Constraint::Length(strip_nav_height(&app.layout())),
         ratatui::layout::Constraint::Length(2),
     ])
     .split(right);
@@ -718,6 +718,21 @@ pub struct StripNav {
     pub can_forward: bool,
 }
 
+/// Rows the strip navigation bar takes.
+///
+/// This has to answer the same question the renderer does — is a strip being
+/// drawn — rather than what the layout setting says. The two can disagree, for
+/// instance after switching to Split Tree while the current tab still holds a
+/// strip, and reserving the wrong number of rows put the bar on top of the status
+/// bar.
+pub fn strip_nav_height(node: &PaneLayout) -> u16 {
+    if node.is_strip() {
+        1
+    } else {
+        0
+    }
+}
+
 pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usize) -> StripNav {
     let bar = Rect {
         x: area.x,
@@ -725,20 +740,30 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
         width: area.width,
         height: 1,
     };
-    let cell = |x: u16| Rect {
-        x,
+    // Controls sit in their own cells with a blank between them, so an arrow
+    // never reads as part of the rail next to it.
+    let back = Rect {
+        x: bar.x,
         y: bar.y,
         width: 1,
         height: 1,
     };
-    let add = cell(bar.x + bar.width.saturating_sub(1));
-    let forward = cell(add.x.saturating_sub(1));
-    let back = cell(bar.x);
-    let track_x = back.x + 1;
-    let track = Rect {
-        x: track_x,
+    let add = Rect {
+        x: bar.x + bar.width.saturating_sub(1),
         y: bar.y,
-        width: forward.x.saturating_sub(1).saturating_sub(track_x),
+        width: 1,
+        height: 1,
+    };
+    let forward = Rect {
+        x: add.x.saturating_sub(2),
+        y: bar.y,
+        width: 1,
+        height: 1,
+    };
+    let track = Rect {
+        x: back.x + 2,
+        y: bar.y,
+        width: forward.x.saturating_sub(3).saturating_sub(back.x + 2),
         height: 1,
     };
 
@@ -748,8 +773,8 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
     let max_scroll = total.saturating_sub(viewport);
     let scroll = scroll.min(max_scroll);
 
-    // The track stands for the whole band and the window for the part of it on
-    // screen, so the bar answers "where am I and how much is left" without the
+    // The rail stands for the whole band and the lit run for the part on screen,
+    // so the bar says where the strip is and how much of it is left without the
     // user having to open anything.
     let (offset, span) = if track.width == 0 || total <= viewport {
         (0usize, track.width as usize)
@@ -786,37 +811,49 @@ fn render_strip_nav(
     scroll: usize,
 ) {
     let nav = strip_nav(area, column_width, columns.len(), scroll);
-    if nav.bar.width < 4 || nav.track.width == 0 {
+    if nav.bar.width < 8 || nav.track.width == 0 {
         return;
     }
-    let glyph = |c: ratatui::style::Color| Style::default().fg(c);
+    let arrow = |live: bool| {
+        Style::default()
+            .fg(if live { accent() } else { fg_muted() })
+            .add_modifier(Modifier::BOLD)
+    };
+    // Bold glyphs in the accent colour, dimmed at an end with nothing past it,
+    // rather than hairlines that disappear into the rail.
+    frame.render_widget(
+        Paragraph::new("\u{25c0}").style(arrow(nav.can_back)),
+        nav.back,
+    );
+    frame.render_widget(
+        Paragraph::new("\u{25b6}").style(arrow(nav.can_forward)),
+        nav.forward,
+    );
+    frame.render_widget(
+        Paragraph::new("+").style(Style::default().fg(accent()).add_modifier(Modifier::BOLD)),
+        nav.add,
+    );
 
-    // Arrows stay put and dim at whichever end has nothing left, which is what
-    // tells you the band has an end there.
-    for (spot, ch, live) in [
-        (nav.back, "\u{2039}", nav.can_back),
-        (nav.forward, "\u{203a}", nav.can_forward),
-    ] {
-        let colour = if live { accent_idle() } else { fg_muted() };
-        frame.render_widget(Paragraph::new(ch).style(glyph(colour)), spot);
-    }
-    frame.render_widget(Paragraph::new("+").style(glyph(accent_idle())), nav.add);
-
-    let rail = "\u{2500}".repeat(nav.track.width as usize);
-    frame.render_widget(Paragraph::new(rail).style(glyph(border_dim())), nav.track);
+    // End caps stop the rail reading as one long rule across the bottom.
+    let rail = format!(
+        "\u{2502}{}\u{2502}",
+        "\u{2500}".repeat(nav.track.width.saturating_sub(2) as usize)
+    );
+    frame.render_widget(
+        Paragraph::new(rail).style(Style::default().fg(border_dim())),
+        Rect {
+            x: nav.track.x,
+            y: nav.track.y,
+            width: nav.track.width,
+            height: 1,
+        },
+    );
     if nav.window.width > 0 {
         let lit = "\u{2501}".repeat(nav.window.width as usize);
-        frame.render_widget(Paragraph::new(lit).style(glyph(accent_idle())), nav.window);
-    }
-}
-
-/// Rows the strip navigation bar takes. A split tree has no horizontal band, so
-/// it gets its rows back.
-pub fn strip_nav_height(app: &App) -> u16 {
-    if app.layout_mode == crate::app::LayoutMode::Strip && app.zoomed_pane.is_none() {
-        1
-    } else {
-        0
+        frame.render_widget(
+            Paragraph::new(lit).style(Style::default().fg(accent())),
+            nav.window,
+        );
     }
 }
 
@@ -1873,13 +1910,37 @@ mod tests {
         }
         assert_eq!(
             nav.track.x,
-            nav.back.x + 1,
-            "the track starts after the back arrow"
+            nav.back.x + 2,
+            "a blank separates the arrow from the rail, or they read as one mark"
         );
         assert_eq!(
             nav.forward.x,
-            nav.add.x - 1,
-            "and stops before the forward arrow"
+            nav.add.x - 2,
+            "and the plus keeps its own gap, so neither looks like the other"
+        );
+    }
+
+    #[test]
+    fn the_bar_reserves_a_row_only_when_a_strip_is_drawn() {
+        let strip = PaneLayout::Strip {
+            columns: vec![StripColumn::single(PaneId(1))],
+            column_width: 80,
+        };
+        let tree = PaneLayout::Split {
+            direction: SplitDir::Vertical,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+            ratio: 0.5,
+        };
+        assert_eq!(
+            strip_nav_height(&strip),
+            1,
+            "a strip needs its row, whatever the layout setting says"
+        );
+        assert_eq!(
+            strip_nav_height(&tree),
+            0,
+            "a split tree gets the row back, so nothing is drawn over the status bar"
         );
     }
 
@@ -1908,6 +1969,12 @@ mod tests {
 
         let at_end = strip_nav(area, 80, 3, 140);
         assert!(at_end.can_back && !at_end.can_forward);
+
+        let forward_at_start = strip_nav(area, 80, 3, 0);
+        assert_eq!(
+            forward_at_start.window.x, forward_at_start.track.x,
+            "at the left end the lit run starts at the rail"
+        );
     }
 
     #[test]

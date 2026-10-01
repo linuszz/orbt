@@ -84,7 +84,7 @@ fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layo
     let agent_w = agent_panel_width(term_cols, app.agent_panel_mode);
     let total_cols = term_cols.saturating_sub(sidebar_w + agent_w).max(20);
     let total_rows = term_rows
-        .saturating_sub(3 + orbt_tui::tui::strip_nav_height(app))
+        .saturating_sub(3 + orbt_tui::tui::strip_nav_height(&app.layout()))
         .max(5);
     ratatui::layout::Rect {
         x: sidebar_w,
