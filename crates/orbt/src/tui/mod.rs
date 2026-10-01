@@ -190,11 +190,16 @@ pub fn render(frame: &mut Frame, app: &App) {
         height: cols[1].height,
     };
 
+    // Five rows: tab bar, the panes, the strip's navigation, the status line, and
+    // the rule under it. The navigation row is zero height for a split tree, and
+    // the status line keeps its own row so the two cannot paint over each other.
+    let nav_h = strip_nav_height(&app.layout());
     let rows = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Fill(1),
-        ratatui::layout::Constraint::Length(strip_nav_height(&app.layout())),
-        ratatui::layout::Constraint::Length(2),
+        ratatui::layout::Constraint::Length(nav_h),
+        ratatui::layout::Constraint::Length(1),
+        ratatui::layout::Constraint::Length(1),
     ])
     .split(right);
 
@@ -202,12 +207,12 @@ pub fn render(frame: &mut Frame, app: &App) {
     frame.render_widget(Clear, rows[1]);
     render_pane_tree(frame, rows[1], &app.layout(), app);
     let status_inner = Rect {
-        x: rows[2].x,
-        y: rows[2].y,
-        width: rows[2].width,
+        x: rows[3].x,
+        y: rows[3].y,
+        width: rows[3].width,
         height: 1,
     };
-    let border_y = rows[2].y + 1;
+    let border_y = rows[3].y + 1;
     widgets::status_bar::render(frame, status_inner, app);
 
     if app.agent_fleet_enabled {
@@ -1918,6 +1923,76 @@ mod tests {
             nav.add.x - 2,
             "and the plus keeps its own gap, so neither looks like the other"
         );
+    }
+
+    /// The rows the desktop layout hands to each part of the footer, so a test
+    /// can assert the navigation bar and the status line are told apart.
+    fn footer_rows(total: u16, nav_h: u16) -> Vec<ratatui::layout::Rect> {
+        ratatui::layout::Layout::vertical([
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Fill(1),
+            ratatui::layout::Constraint::Length(nav_h),
+            ratatui::layout::Constraint::Length(1),
+            ratatui::layout::Constraint::Length(1),
+        ])
+        .split(Rect {
+            x: 24,
+            y: 0,
+            width: 100,
+            height: total,
+        })
+        .to_vec()
+    }
+
+    #[test]
+    fn the_navigation_bar_and_the_status_line_are_on_different_rows() {
+        let rows = footer_rows(24, 1);
+        let nav = rows[2];
+        let status = rows[3];
+        assert!(nav.height > 0, "the strip gets its row");
+        assert!(
+            nav.y + nav.height <= status.y,
+            "the bar sits above the status line, not on it: {:?} then {:?}",
+            nav,
+            status
+        );
+
+        let border = rows[4];
+        assert!(status.y + status.height <= border.y);
+    }
+
+    #[test]
+    fn a_split_tree_gives_the_row_back_and_draws_no_bar() {
+        let rows = footer_rows(24, 0);
+        assert_eq!(rows[2].height, 0, "the slot collapses");
+        assert_eq!(rows[3].y, rows[1].y + rows[1].height, "status moves up");
+        assert_eq!(
+            strip_nav_height(&PaneLayout::Leaf(PaneId(1))),
+            0,
+            "and nothing asks for a bar"
+        );
+    }
+
+    #[test]
+    fn the_panes_stop_where_the_bar_begins() {
+        // What compute_pane_area derives has to land on the row the layout gives
+        // the panes, or the bar is drawn a row away from where it was reserved.
+        for nav_h in [0u16, 1] {
+            let total = 24u16;
+            let rows = footer_rows(total, nav_h);
+            let pane = content_area_for(total, 24, nav_h);
+            assert_eq!(pane.height, rows[1].height, "nav_h={nav_h}");
+            assert_eq!(pane.y + pane.height, rows[2].y, "nav_h={nav_h}");
+        }
+    }
+
+    fn content_area_for(total: u16, _cols: u16, nav_h: u16) -> Rect {
+        Rect {
+            x: 24,
+            y: 1,
+            width: 100,
+            height: total.saturating_sub(3 + nav_h).max(5),
+        }
     }
 
     #[test]
