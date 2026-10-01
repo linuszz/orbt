@@ -83,19 +83,13 @@ fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layo
     };
     let agent_w = agent_panel_width(term_cols, app.agent_panel_mode);
     let total_cols = term_cols.saturating_sub(sidebar_w + agent_w).max(20);
-    let total_rows = term_rows.saturating_sub(3).max(5);
-    // A strip keeps a column free on each side for its scroll arrows, so they hold
-    // still while the band scrolls under them. Taking the space here rather than
-    // inside the renderer keeps hit testing and the pane geometry in step.
-    let (gutter, x) = if app.pane_tree().is_strip() && total_cols > 24 {
-        (1u16, sidebar_w + 1)
-    } else {
-        (0u16, sidebar_w)
-    };
+    let total_rows = term_rows
+        .saturating_sub(3 + orbt_tui::tui::strip_nav_height(app))
+        .max(5);
     ratatui::layout::Rect {
-        x,
+        x: sidebar_w,
         y: 1,
-        width: total_cols.saturating_sub(gutter * 2).max(20),
+        width: total_cols,
         height: total_rows,
     }
 }
@@ -2752,91 +2746,88 @@ async fn handle_mouse(
                 }
             }
 
-            // The strip's arrows sit in the gutters beside the band, so this has
-            // to test them before the panes, which start one column in.
-            if app.zoomed_pane.is_none() && mouse.row == 1 {
+            // One geometry for both drawing and clicking: the bar's own rects,
+            // so a button cannot end up somewhere other than where it is drawn.
+            if app.zoomed_pane.is_none() {
                 let band = content_area(term_size, app);
                 if let orbt_protocol::PaneLayout::Strip {
                     columns,
                     column_width,
                 } = app.pane_tree()
                 {
-                    let effective = orbt_tui::tui::strip_solo_width(columns, *column_width, band);
-                    let scroll = orbt_tui::tui::strip_scroll_target(
-                        columns,
-                        effective,
-                        band,
-                        app.active_pane,
+                    let (effective, count, firsts) = (
+                        orbt_tui::tui::strip_solo_width(columns, *column_width, band),
+                        columns.len(),
+                        columns
+                            .iter()
+                            .filter_map(|c| c.panes.first().copied())
+                            .collect::<Vec<_>>(),
                     );
-                    let arrows = orbt_tui::tui::strip_arrows(columns, effective, band, scroll);
-                    let hit = |spot: Option<ratatui::layout::Rect>| {
-                        spot.is_some_and(|r| {
-                            mouse.column >= r.x
-                                && mouse.column < r.x + r.width
-                                && mouse.row >= r.y
-                                && mouse.row < r.y + r.height
-                        })
-                    };
-                    let (step, live) = if hit(arrows.left) {
-                        (false, arrows.can_left)
-                    } else if hit(arrows.right) {
-                        (true, arrows.can_right)
+                    let focus = app.active_pane;
+                    let scroll =
+                        orbt_tui::tui::strip_scroll_target(columns, effective, band, focus);
+                    let nav = orbt_tui::tui::strip_nav(band, effective, count, scroll);
+                    let on = |r: ratatui::layout::Rect| mouse.column == r.x && mouse.row == r.y;
+
+                    let step = if on(nav.back) {
+                        (!nav.can_back).then_some(false)
+                    } else if on(nav.forward) {
+                        nav.can_forward.then_some(true)
                     } else {
-                        (false, false)
+                        None
                     };
-                    if live {
+                    let tab_id = app.active_tab_id;
+
+                    if let Some(forward) = step {
                         if let Some(target) = app.pane_tree().find_pane_in_direction(
-                            app.active_pane,
+                            focus,
                             SplitDir::Horizontal,
-                            step,
+                            forward,
                         ) {
                             app.active_pane = target;
                             app.needs_redraw = true;
                             let _ = writer
                                 .send(ClientMessage::FocusPane {
-                                    tab_id: app.active_tab_id,
+                                    tab_id,
                                     pane_id: target,
                                 })
                                 .await;
                         }
                         return;
                     }
-                }
-            }
 
-            // The "+" in the strip's trailing gap: a new pane beside the focus,
-            // which is the one direction the strip never fills on its own.
-            if app.zoomed_pane.is_none() && mouse.row > 0 {
-                let pane_area = content_area(term_size, app);
-                if let orbt_protocol::PaneLayout::Strip {
-                    columns,
-                    column_width,
-                } = app.pane_tree()
-                {
-                    let scroll = orbt_tui::tui::strip_scroll_target(
-                        columns,
-                        *column_width,
-                        pane_area,
-                        app.active_pane,
-                    );
-                    if let Some(spot) =
-                        orbt_tui::tui::strip_add_button(columns, *column_width, pane_area, scroll)
+                    if on(nav.add) {
+                        let _ = writer
+                            .send(ClientMessage::SplitPane {
+                                tab_id,
+                                pane_id: focus,
+                                direction: orbt_protocol::SplitDir::Horizontal,
+                            })
+                            .await;
+                        app.needs_redraw = true;
+                        return;
+                    }
+
+                    // Anywhere on the rail jumps to the pane under the cursor.
+                    if mouse.row == nav.track.y
+                        && mouse.column >= nav.track.x
+                        && mouse.column < nav.track.x + nav.track.width
                     {
-                        let hit = mouse.column >= spot.x
-                            && mouse.column < spot.x + spot.width
-                            && mouse.row >= spot.y
-                            && mouse.row < spot.y + spot.height;
-                        if hit {
+                        let cell = (mouse.column - nav.track.x) as usize;
+                        let total = count * effective.max(1) as usize;
+                        let band_pos = cell * total / nav.track.width.max(1) as usize;
+                        let idx = band_pos / effective.max(1) as usize;
+                        if let Some(target) = firsts.get(idx).copied() {
+                            app.active_pane = target;
+                            app.needs_redraw = true;
                             let _ = writer
-                                .send(ClientMessage::SplitPane {
-                                    tab_id: app.active_tab_id,
-                                    pane_id: app.active_pane,
-                                    direction: orbt_protocol::SplitDir::Horizontal,
+                                .send(ClientMessage::FocusPane {
+                                    tab_id,
+                                    pane_id: target,
                                 })
                                 .await;
-                            app.needs_redraw = true;
-                            return;
                         }
+                        return;
                     }
                 }
             }

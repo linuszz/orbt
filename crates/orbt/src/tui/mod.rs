@@ -9,7 +9,7 @@ use crossterm::{
 use orbt_protocol::{PaneId, PaneLayout, SplitDir, StripColumn, TermColor};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::{Alignment, Rect},
+    layout::Rect,
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -97,83 +97,6 @@ pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) 
     }
     area.width.max(column_width)
 }
-
-/// Which way the strip can still move, and where its arrows go.
-///
-/// Each arrow is drawn dimmed when there is nothing that way, which is what
-/// tells you the band has an end.
-pub struct StripArrows {
-    pub left: Option<Rect>,
-    pub right: Option<Rect>,
-    pub can_left: bool,
-    pub can_right: bool,
-}
-
-pub fn strip_arrows(
-    columns: &[StripColumn],
-    column_width: u16,
-    band: Rect,
-    scroll: usize,
-) -> StripArrows {
-    let width = column_width.max(1) as usize;
-    let total = width * columns.len();
-    let viewport = band.width as usize;
-    let max_scroll = total.saturating_sub(viewport);
-    let can_left = scroll > 0;
-    let can_right = scroll < max_scroll;
-
-    // The arrows go in the gutters compute_pane_area reserved beside the band,
-    // which the caller has already trimmed, so they are just outside it.
-    let row = Rect {
-        x: band.x.saturating_sub(1),
-        y: band.y,
-        width: 1,
-        height: 1,
-    };
-    StripArrows {
-        left: can_left.then_some(row),
-        right: can_right.then_some(Rect {
-            x: band.x + band.width,
-            y: band.y,
-            width: 1,
-            height: 1,
-        }),
-        can_left,
-        can_right,
-    }
-}
-
-/// Where the "add pane" affordance sits inside the strip's area, if there is
-/// room to draw it.
-///
-/// It sits in the gap after the last fully visible column, so the button never
-/// covers terminal content, and it is only offered when the strip is not already
-/// scrolled to its end: clicking it should grow the band somewhere the user can
-/// see, not past the viewport.
-pub fn strip_add_button(
-    columns: &[StripColumn],
-    column_width: u16,
-    area: Rect,
-    scroll: usize,
-) -> Option<Rect> {
-    let last_visible = strip_areas_at(columns, column_width, area, scroll)
-        .into_iter()
-        .filter(|(_, r, _)| r.width > 0)
-        .map(|(_, r, _)| r)
-        .next_back()?;
-    let right = last_visible.x + last_visible.width;
-    let screen_right = area.x + area.width;
-    if right + 2 > screen_right {
-        return None;
-    }
-    Some(Rect {
-        x: right + 1,
-        y: area.y,
-        width: 1,
-        height: area.height.min(3),
-    })
-}
-
 /// The overview is a floating panel over the strip, not a replacement for it: it
 /// keeps a margin so the panes stay visible behind it, and it grows with the
 /// tallest column so a card is never squeezed below the point of being readable.
@@ -270,6 +193,7 @@ pub fn render(frame: &mut Frame, app: &App) {
     let rows = ratatui::layout::Layout::vertical([
         ratatui::layout::Constraint::Length(1),
         ratatui::layout::Constraint::Fill(1),
+        ratatui::layout::Constraint::Length(strip_nav_height(app)),
         ratatui::layout::Constraint::Length(2),
     ])
     .split(right);
@@ -774,6 +698,128 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
     }
 }
 
+/// The strip's navigation bar: where the band is, how much of it is on screen,
+/// and the controls for moving and growing it.
+///
+/// The bar sits under the panes rather than beside them. Arrows in a gutter cost
+/// the panes two columns and read as part of the sidebar, and a control drawn in
+/// the leftover space to the right of a lone pane is only reachable when there is
+/// leftover space. A row of its own is always in the same place and costs the
+/// panes nothing.
+pub struct StripNav {
+    pub bar: Rect,
+    pub back: Rect,
+    pub forward: Rect,
+    pub add: Rect,
+    pub track: Rect,
+    /// The on-screen slice of the band, as a run of cells within `track`.
+    pub window: Rect,
+    pub can_back: bool,
+    pub can_forward: bool,
+}
+
+pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usize) -> StripNav {
+    let bar = Rect {
+        x: area.x,
+        y: area.y + area.height,
+        width: area.width,
+        height: 1,
+    };
+    let cell = |x: u16| Rect {
+        x,
+        y: bar.y,
+        width: 1,
+        height: 1,
+    };
+    let add = cell(bar.x + bar.width.saturating_sub(1));
+    let forward = cell(add.x.saturating_sub(1));
+    let back = cell(bar.x);
+    let track_x = back.x + 1;
+    let track = Rect {
+        x: track_x,
+        y: bar.y,
+        width: forward.x.saturating_sub(1).saturating_sub(track_x),
+        height: 1,
+    };
+
+    let width = column_width.max(1) as usize;
+    let total = width * column_count.max(1);
+    let viewport = area.width.max(1) as usize;
+    let max_scroll = total.saturating_sub(viewport);
+    let scroll = scroll.min(max_scroll);
+
+    // The track stands for the whole band and the window for the part of it on
+    // screen, so the bar answers "where am I and how much is left" without the
+    // user having to open anything.
+    let (offset, span) = if track.width == 0 || total <= viewport {
+        (0usize, track.width as usize)
+    } else {
+        let span = (track.width as usize * viewport / total).max(1);
+        let room = track.width as usize - span;
+        let offset = room * scroll / max_scroll.max(1);
+        (offset, span)
+    };
+    let window = Rect {
+        x: track.x + offset as u16,
+        y: track.y,
+        width: span.min(track.width as usize - offset) as u16,
+        height: 1,
+    };
+
+    StripNav {
+        bar,
+        back,
+        forward,
+        add,
+        track,
+        window,
+        can_back: scroll > 0,
+        can_forward: scroll < max_scroll,
+    }
+}
+
+fn render_strip_nav(
+    frame: &mut Frame,
+    columns: &[StripColumn],
+    column_width: u16,
+    area: Rect,
+    scroll: usize,
+) {
+    let nav = strip_nav(area, column_width, columns.len(), scroll);
+    if nav.bar.width < 4 || nav.track.width == 0 {
+        return;
+    }
+    let glyph = |c: ratatui::style::Color| Style::default().fg(c);
+
+    // Arrows stay put and dim at whichever end has nothing left, which is what
+    // tells you the band has an end there.
+    for (spot, ch, live) in [
+        (nav.back, "\u{2039}", nav.can_back),
+        (nav.forward, "\u{203a}", nav.can_forward),
+    ] {
+        let colour = if live { accent_idle() } else { fg_muted() };
+        frame.render_widget(Paragraph::new(ch).style(glyph(colour)), spot);
+    }
+    frame.render_widget(Paragraph::new("+").style(glyph(accent_idle())), nav.add);
+
+    let rail = "\u{2500}".repeat(nav.track.width as usize);
+    frame.render_widget(Paragraph::new(rail).style(glyph(border_dim())), nav.track);
+    if nav.window.width > 0 {
+        let lit = "\u{2501}".repeat(nav.window.width as usize);
+        frame.render_widget(Paragraph::new(lit).style(glyph(accent_idle())), nav.window);
+    }
+}
+
+/// Rows the strip navigation bar takes. A split tree has no horizontal band, so
+/// it gets its rows back.
+pub fn strip_nav_height(app: &App) -> u16 {
+    if app.layout_mode == crate::app::LayoutMode::Strip && app.zoomed_pane.is_none() {
+        1
+    } else {
+        0
+    }
+}
+
 pub fn find_split_at_cursor(
     node: &PaneLayout,
     area: Rect,
@@ -866,31 +912,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
                 }
             }
-            // Arrows mark the ends of the band and carry the movement, so a
-            // strip is something you drive rather than something you discover.
-            let arrows = strip_arrows(columns, effective, area, scroll);
-            for (spot, glyph, live) in [
-                (arrows.left, "\u{2039}", arrows.can_left),
-                (arrows.right, "\u{203a}", arrows.can_right),
-            ] {
-                if let Some(spot) = spot {
-                    let colour = if live { accent_idle() } else { fg_muted() };
-                    frame.render_widget(
-                        Paragraph::new(glyph).style(Style::default().fg(colour)),
-                        spot,
-                    );
-                }
-            }
-            // A lone pane leaves the rest of the band empty, which reads as
-            // broken rather than as room to grow. The plus is the invitation.
-            if let Some(spot) = strip_add_button(columns, effective, area, scroll) {
-                frame.render_widget(
-                    Paragraph::new("+")
-                        .style(Style::default().fg(accent_idle()))
-                        .alignment(Alignment::Center),
-                    spot,
-                );
-            }
+            render_strip_nav(frame, columns, effective, area, scroll);
         }
         PaneLayout::Split {
             direction,
@@ -1831,51 +1853,79 @@ mod tests {
     }
 
     #[test]
-    fn the_add_button_lands_in_the_gap_after_the_last_column() {
-        let columns = vec![StripColumn::single(PaneId(1))];
+    fn the_bar_hands_out_reachable_cells_and_never_touches_the_panes() {
         let area = Rect {
-            x: 0,
-            y: 0,
-            width: 200,
+            x: 24,
+            y: 1,
+            width: 100,
             height: 20,
         };
-        let button = strip_add_button(&columns, 80, area, 0).expect("room to grow");
-        assert_eq!(button.x, 81, "one column of gap past the 80 wide pane");
-        assert!(
-            button.x >= area.x + 80 && button.x + button.width <= area.x + area.width,
-            "inside the viewport and not covering the pane"
+        let nav = strip_nav(area, 80, 3, 0);
+        assert_eq!(nav.bar.y, 21, "one row below the panes, not beside them");
+        assert_eq!(nav.back.x, area.x);
+        assert_eq!(nav.add.x, area.x + area.width - 1);
+        for spot in [nav.back, nav.forward, nav.add, nav.track, nav.window] {
+            assert!(
+                spot.y >= area.y + area.height,
+                "controls live in their own row, so no pane loses a column to them"
+            );
+            assert!(spot.x >= area.x && spot.x + spot.width <= area.x + area.width);
+        }
+        assert_eq!(
+            nav.track.x,
+            nav.back.x + 1,
+            "the track starts after the back arrow"
+        );
+        assert_eq!(
+            nav.forward.x,
+            nav.add.x - 1,
+            "and stops before the forward arrow"
         );
     }
 
     #[test]
-    fn no_add_button_when_the_band_already_fills_the_view() {
-        let columns = vec![
-            StripColumn::single(PaneId(1)),
-            StripColumn::single(PaneId(2)),
-        ];
-        let area = Rect {
-            x: 0,
-            y: 0,
-            width: 160,
-            height: 20,
-        };
-        assert_eq!(strip_add_button(&columns, 80, area, 0), None);
-    }
-
-    #[test]
-    fn the_add_button_disappears_once_scrolled_to_the_end() {
-        let columns = vec![
-            StripColumn::single(PaneId(1)),
-            StripColumn::single(PaneId(2)),
-            StripColumn::single(PaneId(3)),
-        ];
+    fn the_window_sits_inside_the_rail_and_grows_as_there_is_more_to_see() {
         let area = Rect {
             x: 0,
             y: 0,
             width: 100,
-            height: 20,
+            height: 10,
         };
-        assert_eq!(strip_add_button(&columns, 80, area, 160), None);
+        let nav = strip_nav(area, 80, 3, 0);
+        assert!(nav.window.x >= nav.track.x);
+        assert!(nav.window.x + nav.window.width <= nav.track.x + nav.track.width);
+        assert!(
+            !nav.can_back,
+            "at the left end there is nowhere to go back to"
+        );
+        assert!(nav.can_forward);
+
+        let many = strip_nav(area, 20, 20, 0);
+        assert!(
+            many.window.width < nav.window.width,
+            "more panes means the visible slice is a smaller share of the bar"
+        );
+
+        let at_end = strip_nav(area, 80, 3, 140);
+        assert!(at_end.can_back && !at_end.can_forward);
+    }
+
+    #[test]
+    fn a_band_that_fits_gives_the_whole_rail_and_no_arrows() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 10,
+        };
+        let nav = strip_nav(area, 80, 1, 0);
+        assert_eq!(nav.window.width, nav.track.width);
+        assert!(!nav.can_back && !nav.can_forward, "nothing to move");
+        assert_eq!(
+            nav.add.x,
+            area.x + area.width - 1,
+            "the add button is always reachable, even with one pane"
+        );
     }
 
     #[test]
@@ -1910,47 +1960,6 @@ mod tests {
             strip_solo_width(&stacked, 80, area),
             80,
             "a column of stacked panes is already using the height it was given"
-        );
-    }
-
-    #[test]
-    fn arrows_appear_only_where_the_band_can_move() {
-        let columns = vec![
-            StripColumn::single(PaneId(1)),
-            StripColumn::single(PaneId(2)),
-            StripColumn::single(PaneId(3)),
-        ];
-        let band = Rect {
-            x: 1,
-            y: 1,
-            width: 100,
-            height: 20,
-        };
-
-        let at_start = strip_arrows(&columns, 80, band, 0);
-        assert!(!at_start.can_left, "nothing before the first column");
-        assert!(at_start.can_right);
-        assert_eq!(at_start.left, None, "a dead arrow is not drawn");
-        assert_eq!(
-            at_start.right.map(|r| r.x),
-            Some(band.x + band.width),
-            "the arrow sits in the gutter just past the band"
-        );
-
-        let at_end = strip_arrows(&columns, 80, band, 140);
-        assert!(at_end.can_left);
-        assert!(!at_end.can_right);
-        assert_eq!(at_end.right, None);
-        assert_eq!(
-            at_end.left.map(|r| r.x),
-            band.x.checked_sub(1),
-            "and in the gutter just before it"
-        );
-
-        let everything_fits = strip_arrows(&columns[..1], 80, band, 0);
-        assert!(
-            !everything_fits.can_left && !everything_fits.can_right,
-            "a band that fits has no arrows at all"
         );
     }
 
