@@ -402,6 +402,8 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         ("  \"", "split pane vertical (top/bottom)"),
         ("  x", "close current pane"),
         ("  o", "cycle focus between panes"),
+        ("  ← →", "focus pane left / right"),
+        ("  ⇧↑ ⇧↓", "focus pane above / below"),
         ("  z", "zoom pane (toggle fullscreen)"),
         ("  [", "enter copy/scroll mode"),
         ("  c", "new window (tab)"),

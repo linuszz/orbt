@@ -127,10 +127,7 @@ fn render_inner(frame: &mut Frame, area: Rect, dim_area: Rect, app: &App) {
             Line::from(vec![
                 Span::styled("/ to search", Style::default().fg(fg_muted())),
                 Span::raw("  "),
-                Span::styled(
-                    "up/down navigate  Enter select  Esc close  , settings",
-                    Style::default().fg(fg_muted()),
-                ),
+                Span::styled("Enter select  , settings", Style::default().fg(fg_muted())),
             ])
         } else {
             Line::from(vec![
@@ -312,11 +309,13 @@ fn render_inner(frame: &mut Frame, area: Rect, dim_area: Rect, app: &App) {
             frame.render_widget(
                 Line::from(vec![
                     Span::styled("Esc ", Style::default().fg(accent())),
-                    Span::styled("close  ", Style::default().fg(fg_muted())),
+                    Span::styled("close   ", Style::default().fg(fg_muted())),
+                    Span::styled("\u{2190}\u{2192} ", Style::default().fg(accent())),
+                    Span::styled("pane   ", Style::default().fg(fg_muted())),
+                    Span::styled("\u{21e7}\u{2191}\u{2193} ", Style::default().fg(accent())),
+                    Span::styled("pane   ", Style::default().fg(fg_muted())),
                     Span::styled("\u{2191}\u{2193} ", Style::default().fg(accent())),
-                    Span::styled("navigate  ", Style::default().fg(fg_muted())),
-                    Span::styled(", ", Style::default().fg(accent())),
-                    Span::styled("settings", Style::default().fg(fg_muted())),
+                    Span::styled("scroll", Style::default().fg(fg_muted())),
                     Span::raw(" ".repeat(inner.width.saturating_sub(36) as usize)),
                     Span::styled(indicator, Style::default().fg(fg_muted())),
                 ]),
@@ -332,11 +331,13 @@ fn render_inner(frame: &mut Frame, area: Rect, dim_area: Rect, app: &App) {
             frame.render_widget(
                 Line::from(vec![
                     Span::styled("Esc ", Style::default().fg(accent())),
-                    Span::styled("close  ", Style::default().fg(fg_muted())),
+                    Span::styled("close   ", Style::default().fg(fg_muted())),
+                    Span::styled("\u{2190}\u{2192} ", Style::default().fg(accent())),
+                    Span::styled("pane   ", Style::default().fg(fg_muted())),
+                    Span::styled("\u{21e7}\u{2191}\u{2193} ", Style::default().fg(accent())),
+                    Span::styled("pane   ", Style::default().fg(fg_muted())),
                     Span::styled("\u{2191}\u{2193} ", Style::default().fg(accent())),
-                    Span::styled("navigate  ", Style::default().fg(fg_muted())),
-                    Span::styled(", ", Style::default().fg(accent())),
-                    Span::styled("settings", Style::default().fg(fg_muted())),
+                    Span::styled("scroll", Style::default().fg(fg_muted())),
                 ]),
                 Rect {
                     x: inner.x,

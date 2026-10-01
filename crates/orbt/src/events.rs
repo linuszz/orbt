@@ -1023,6 +1023,9 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                     return;
                 };
                 let layout = &tab.pane_tree;
+                let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+                // Left and right move between panes; up and down belong to the
+                // list, so reaching a pane stacked above or below takes Shift.
                 let target = match key.code {
                     KeyCode::Left => layout.find_pane_in_direction(
                         app.active_pane,
@@ -1034,12 +1037,12 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         orbt_protocol::SplitDir::Horizontal,
                         true,
                     ),
-                    KeyCode::Up => layout.find_pane_in_direction(
+                    KeyCode::Up if shift => layout.find_pane_in_direction(
                         app.active_pane,
                         orbt_protocol::SplitDir::Vertical,
                         false,
                     ),
-                    KeyCode::Down => layout.find_pane_in_direction(
+                    KeyCode::Down if shift => layout.find_pane_in_direction(
                         app.active_pane,
                         orbt_protocol::SplitDir::Vertical,
                         true,

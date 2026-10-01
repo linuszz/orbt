@@ -90,8 +90,8 @@ pub enum AgentPanelMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum LayoutMode {
-    #[default]
     Bsp,
+    #[default]
     Strip,
 }
 
@@ -170,7 +170,7 @@ impl Default for UserSettings {
             agent_panel_visible: false,
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
-            layout_mode: LayoutMode::Bsp,
+            layout_mode: LayoutMode::Strip,
         }
     }
 }
@@ -923,7 +923,7 @@ impl App {
             zoomed_pane: None,
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,
-            layout_mode: LayoutMode::Bsp,
+            layout_mode: LayoutMode::Strip,
             settings_open: false,
             settings_selected: 0,
             pending_payload_path: None,
@@ -2042,7 +2042,7 @@ pub mod tests {
             agent_panel_visible: false,
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
-            layout_mode: LayoutMode::Bsp,
+            layout_mode: LayoutMode::Strip,
         };
         let toml_str = toml::to_string(&settings).unwrap();
         let restored: UserSettings = toml::from_str(&toml_str).unwrap();
