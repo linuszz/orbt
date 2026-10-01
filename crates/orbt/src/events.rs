@@ -1369,38 +1369,25 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
     }
 }
 
-fn resize_local_grids_for_areas(
-    app: &mut App,
-    areas: &[(orbt_protocol::PaneId, ratatui::layout::Rect)],
-) {
-    for (pid, rect) in areas {
-        let pc = rect.width.saturating_sub(2).max(1);
-        let pr = rect.height.saturating_sub(2).max(1);
-        if let Some(pane) = app.panes.get_mut(pid) {
-            pane.parser.grid.resize(pc, pr);
-        }
-    }
-}
-
 fn resize_local_grids(app: &mut App, term_cols: u16, term_rows: u16) {
     let pane_area = compute_pane_area(term_cols, term_rows, app);
-    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
-    resize_local_grids_for_areas(app, &areas);
+    for (pid, cols, rows) in orbt_tui::tui::pane_terminal_sizes(&app.layout(), pane_area) {
+        if let Some(pane) = app.panes.get_mut(&pid) {
+            pane.parser.grid.resize(cols, rows);
+        }
+    }
 }
 
 async fn send_pane_resizes(app: &mut App, writer: &IpcWriter, term_cols: u16, term_rows: u16) {
     resize_local_grids(app, term_cols, term_rows);
     let pane_area = compute_pane_area(term_cols, term_rows, app);
-    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
-    for (pid, rect) in areas {
-        let pc = rect.width.saturating_sub(2).max(1);
-        let pr = rect.height.saturating_sub(2).max(1);
+    for (pid, cols, rows) in orbt_tui::tui::pane_terminal_sizes(&app.layout(), pane_area) {
         let _ = writer
             .send(ClientMessage::ResizePane {
                 tab_id: app.active_tab_id,
                 pane_id: pid,
-                cols: pc,
-                rows: pr,
+                cols,
+                rows,
             })
             .await;
     }
@@ -1982,7 +1969,11 @@ async fn handle_mobile_mouse(
                             height: nav_row.saturating_sub(1),
                         };
                         // Check for pane click — same logic as desktop but with mobile area.
-                        let leaves = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+                        let leaves = orbt_tui::tui::compute_leaf_areas(
+                            &app.layout(),
+                            pane_area,
+                            app.active_pane,
+                        );
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
                                 && mouse.column < rect.x + rect.width
@@ -2971,13 +2962,15 @@ async fn handle_mouse(
                     pane_area,
                     mouse.column,
                     mouse.row,
+                    app.active_pane,
                 ) {
                     app.drag_split = Some((first_pane, second_pane, dir, -1.0));
                     app.selection = None;
                     return;
                 }
             }
-            let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+            let areas =
+                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.active_pane);
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
                     && mouse.column < rect.x + rect.width
@@ -3086,7 +3079,8 @@ async fn handle_mouse(
                     width: term_w.saturating_sub(sidebar_w + agent_w),
                     height: term_h.saturating_sub(3),
                 };
-                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+                let areas =
+                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.active_pane);
                 let mut found_pane = None;
                 for (pid, rect) in &areas {
                     if mouse.column >= rect.x
@@ -3186,7 +3180,11 @@ async fn handle_mouse(
                     .is_some_and(|p| p.parser.grid.mouse_reporting);
                 if has_mouse {
                     let pane_area = content_area(term_size, app);
-                    let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+                    let areas = orbt_tui::tui::compute_leaf_areas(
+                        &app.layout(),
+                        pane_area,
+                        app.active_pane,
+                    );
                     for (pid, rect) in &areas {
                         if *pid == app.active_pane
                             && mouse.column > rect.x
@@ -3217,7 +3215,8 @@ async fn handle_mouse(
                 .map(|s| s.pane_id);
             if let Some(sel_pane_id) = drag_info {
                 let pane_area = content_area(term_size, app);
-                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+                let areas =
+                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.active_pane);
                 for (pid, rect) in &areas {
                     if *pid == sel_pane_id {
                         let inner_x = rect.x + 1;
@@ -3245,7 +3244,8 @@ async fn handle_mouse(
             // Forward mouse release to PTY if mouse reporting is active
             if app.drag_split.is_none() && app.drag_tab.is_none() {
                 let pane_area = content_area(term_size, app);
-                let areas = orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area);
+                let areas =
+                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.active_pane);
                 for (pid, rect) in &areas {
                     if *pid == app.active_pane
                         && mouse.column > rect.x
