@@ -410,6 +410,18 @@ pub static COMMANDS: &[CommandDef] = &[
         id: "cycle_pane",
         label: "Cycle Pane Focus",
         group: "Pane",
+        shortcut: "f",
+    },
+    CommandDef {
+        id: "cycle_pane_back",
+        label: "Cycle Pane Focus Backwards",
+        group: "Pane",
+        shortcut: "F",
+    },
+    CommandDef {
+        id: "strip_overview",
+        label: "Strip Overview",
+        group: "Pane",
         shortcut: "o",
     },
     CommandDef {
@@ -677,6 +689,8 @@ pub struct App {
     pub sidebar_visible: bool,
     pub agent_panel_mode: AgentPanelMode,
     pub show_help: bool,
+    /// Strip overview (prefix+o): every pane as a card, click to focus.
+    pub show_overview: bool,
     pub context_menu: Option<ContextMenu>,
     pub space_name: String,
     pub space_path: String,
@@ -871,6 +885,7 @@ impl App {
             sidebar_visible: true,
             agent_panel_mode: AgentPanelMode::Hidden,
             show_help: false,
+            show_overview: false,
             context_menu: None,
             space_name: spaces
                 .get(active_space_idx)
@@ -1122,7 +1137,7 @@ impl App {
         &self.tabs[self.active_tab].name
     }
 
-    pub fn cycle_focus(&mut self) {
+    pub fn cycle_focus(&mut self, backwards: bool) {
         let leaves = self.pane_tree().leaves();
         if leaves.len() < 2 {
             return;
@@ -1131,7 +1146,12 @@ impl App {
             .iter()
             .position(|&p| p == self.active_pane)
             .unwrap_or(0);
-        self.active_pane = leaves[(idx + 1) % leaves.len()];
+        let next = if backwards {
+            (idx + leaves.len() - 1) % leaves.len()
+        } else {
+            (idx + 1) % leaves.len()
+        };
+        self.active_pane = leaves[next];
         self.needs_redraw = true;
     }
 
@@ -1803,11 +1823,14 @@ pub mod tests {
         let mut app = App::from_welcome(&state, 80, 24);
         app.active_pane = PaneId(1);
 
-        app.cycle_focus();
+        app.cycle_focus(false);
         assert_eq!(app.active_pane, PaneId(2));
 
-        app.cycle_focus();
+        app.cycle_focus(false);
         assert_eq!(app.active_pane, PaneId(1));
+
+        app.cycle_focus(true);
+        assert_eq!(app.active_pane, PaneId(2), "backwards wraps the other way");
     }
 
     #[test]

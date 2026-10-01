@@ -125,14 +125,18 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
                 })
                 .await;
         }
-        "cycle_pane" => {
-            app.cycle_focus();
+        "cycle_pane" | "cycle_pane_back" => {
+            app.cycle_focus(id == "cycle_pane_back");
             let _ = writer
                 .send(ClientMessage::FocusPane {
                     tab_id: app.active_tab_id,
                     pane_id: app.active_pane,
                 })
                 .await;
+        }
+        "strip_overview" => {
+            app.show_overview = !app.show_overview;
+            app.needs_redraw = true;
         }
         "zoom_pane" => {
             app.toggle_zoom();
@@ -864,6 +868,49 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
     // Agent Detail modal captures keyboard when open (lower priority than Eclipse).
     if app.agent_detail_modal.is_some() {
         handle_agent_detail_key(key, app, writer).await;
+        return;
+    }
+
+    if app.show_overview {
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
+                app.show_overview = false;
+            }
+            KeyCode::Left | KeyCode::Right => {
+                let forward = key.code == KeyCode::Right;
+                let leaves = app.pane_tree().leaves();
+                if leaves.len() > 1 {
+                    let idx = leaves
+                        .iter()
+                        .position(|&p| p == app.active_pane)
+                        .unwrap_or(0);
+                    let step = if forward { 1 } else { leaves.len() - 1 };
+                    app.active_pane = leaves[(idx + step) % leaves.len()];
+                    let _ = writer
+                        .send(ClientMessage::FocusPane {
+                            tab_id: app.active_tab_id,
+                            pane_id: app.active_pane,
+                        })
+                        .await;
+                }
+            }
+            KeyCode::Up | KeyCode::Down if shift => {
+                app.show_overview = false;
+                app.cycle_focus(key.code == KeyCode::Down);
+                let _ = writer
+                    .send(ClientMessage::FocusPane {
+                        tab_id: app.active_tab_id,
+                        pane_id: app.active_pane,
+                    })
+                    .await;
+            }
+            KeyCode::Enter => {
+                app.show_overview = false;
+            }
+            _ => {}
+        }
+        app.needs_redraw = true;
         return;
     }
 
@@ -2461,6 +2508,31 @@ async fn handle_mouse(
         return;
     }
 
+    if app.show_overview {
+        if mouse.kind == crossterm::event::MouseEventKind::Down(MouseButton::Left) {
+            let area = orbt_tui::tui::overview_area(content_area(term_size, app));
+            let cards = orbt_tui::tui::widgets::pane_overview::layout(
+                app.pane_tree(),
+                area,
+                app.active_pane,
+            );
+            if let Some(pane) =
+                orbt_tui::tui::widgets::pane_overview::card_at(&cards, mouse.column, mouse.row)
+            {
+                app.active_pane = pane;
+                app.show_overview = false;
+                app.needs_redraw = true;
+                let _ = writer
+                    .send(ClientMessage::FocusPane {
+                        tab_id: app.active_tab_id,
+                        pane_id: pane,
+                    })
+                    .await;
+            }
+        }
+        return;
+    }
+
     if app.settings_open {
         return;
     }
@@ -2664,6 +2736,43 @@ async fn handle_mouse(
                         }
                         app.needs_redraw = true;
                         return;
+                    }
+                }
+            }
+
+            // The "+" in the strip's trailing gap: a new pane beside the focus,
+            // which is the one direction the strip never fills on its own.
+            if app.zoomed_pane.is_none() && mouse.row > 0 {
+                let pane_area = content_area(term_size, app);
+                if let orbt_protocol::PaneLayout::Strip {
+                    columns,
+                    column_width,
+                } = app.pane_tree()
+                {
+                    let scroll = orbt_tui::tui::strip_scroll_target(
+                        columns,
+                        *column_width,
+                        pane_area,
+                        app.active_pane,
+                    );
+                    if let Some(spot) =
+                        orbt_tui::tui::strip_add_button(columns, *column_width, pane_area, scroll)
+                    {
+                        let hit = mouse.column >= spot.x
+                            && mouse.column < spot.x + spot.width
+                            && mouse.row >= spot.y
+                            && mouse.row < spot.y + spot.height;
+                        if hit {
+                            let _ = writer
+                                .send(ClientMessage::SplitPane {
+                                    tab_id: app.active_tab_id,
+                                    pane_id: app.active_pane,
+                                    direction: orbt_protocol::SplitDir::Horizontal,
+                                })
+                                .await;
+                            app.needs_redraw = true;
+                            return;
+                        }
                     }
                 }
             }

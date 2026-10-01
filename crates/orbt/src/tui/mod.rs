@@ -9,7 +9,7 @@ use crossterm::{
 use orbt_protocol::{PaneId, PaneLayout, SplitDir, StripColumn, TermColor};
 use ratatui::{
     backend::CrosstermBackend,
-    layout::Rect,
+    layout::{Alignment, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, Paragraph},
@@ -84,6 +84,50 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 /// §6.7 responsive agent panel width.
 /// Only Sidebar mode occupies layout columns; Modal floats and returns 0.
 /// Returns 0 when the fleet feature is disabled.
+/// Where the "add pane" affordance sits inside the strip's area, if there is
+/// room to draw it.
+///
+/// It sits in the gap after the last fully visible column, so the button never
+/// covers terminal content, and it is only offered when the strip is not already
+/// scrolled to its end: clicking it should grow the band somewhere the user can
+/// see, not past the viewport.
+pub fn strip_add_button(
+    columns: &[StripColumn],
+    column_width: u16,
+    area: Rect,
+    scroll: usize,
+) -> Option<Rect> {
+    let last_visible = strip_areas_at(columns, column_width, area, scroll)
+        .into_iter()
+        .filter(|(_, r, _)| r.width > 0)
+        .map(|(_, r, _)| r)
+        .next_back()?;
+    let right = last_visible.x + last_visible.width;
+    let screen_right = area.x + area.width;
+    if right + 2 > screen_right {
+        return None;
+    }
+    Some(Rect {
+        x: right + 1,
+        y: area.y,
+        width: 1,
+        height: area.height.min(3),
+    })
+}
+
+/// The strip leaves a margin around the cards so a wide band still reads as
+/// cards rather than as one crowded block.
+pub fn overview_area(area: Rect) -> Rect {
+    let w = area.width.saturating_sub(8).max(20);
+    let h = area.height.saturating_sub(4).max(6);
+    Rect {
+        x: area.x + (area.width - w) / 2,
+        y: area.y + (area.height - h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
 pub fn agent_panel_width(term_w: u16, mode: AgentPanelMode) -> u16 {
     if mode != AgentPanelMode::Sidebar || term_w < 80 {
         0
@@ -224,6 +268,10 @@ pub fn render(frame: &mut Frame, app: &App) {
             Paragraph::new(Line::from(Span::styled(line, sep_style))),
             rect,
         );
+    }
+
+    if app.show_overview {
+        widgets::pane_overview::render(frame, overview_area(area), app);
     }
 
     if app.show_help {
@@ -401,9 +449,10 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         ("  %", "split pane horizontal (left|right)"),
         ("  \"", "split pane vertical (top/bottom)"),
         ("  x", "close current pane"),
-        ("  o", "cycle focus between panes"),
+        ("  f / F", "cycle pane focus forward / back"),
         ("  ← →", "focus pane left / right"),
         ("  ⇧↑ ⇧↓", "focus pane above / below"),
+        ("  o", "strip overview (click a pane to focus)"),
         ("  z", "zoom pane (toggle fullscreen)"),
         ("  [", "enter copy/scroll mode"),
         ("  c", "new window (tab)"),
@@ -769,6 +818,16 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                         width: 1,
                         height: 1,
                     },
+                );
+            }
+            // A lone pane leaves the rest of the band empty, which reads as
+            // broken rather than as room to grow. The plus is the invitation.
+            if let Some(spot) = strip_add_button(columns, *column_width, area, scroll) {
+                frame.render_widget(
+                    Paragraph::new("+")
+                        .style(Style::default().fg(accent_idle()))
+                        .alignment(Alignment::Center),
+                    spot,
                 );
             }
         }
@@ -1708,6 +1767,54 @@ mod tests {
             vec![(PaneId(1), 78, 8), (PaneId(2), 78, 8), (PaneId(3), 78, 8)],
             "terminal sizes ignore the viewport entirely"
         );
+    }
+
+    #[test]
+    fn the_add_button_lands_in_the_gap_after_the_last_column() {
+        let columns = vec![StripColumn::single(PaneId(1))];
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 20,
+        };
+        let button = strip_add_button(&columns, 80, area, 0).expect("room to grow");
+        assert_eq!(button.x, 81, "one column of gap past the 80 wide pane");
+        assert!(
+            button.x >= area.x + 80 && button.x + button.width <= area.x + area.width,
+            "inside the viewport and not covering the pane"
+        );
+    }
+
+    #[test]
+    fn no_add_button_when_the_band_already_fills_the_view() {
+        let columns = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+        ];
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 160,
+            height: 20,
+        };
+        assert_eq!(strip_add_button(&columns, 80, area, 0), None);
+    }
+
+    #[test]
+    fn the_add_button_disappears_once_scrolled_to_the_end() {
+        let columns = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ];
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 20,
+        };
+        assert_eq!(strip_add_button(&columns, 80, area, 160), None);
     }
 
     #[test]
