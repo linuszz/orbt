@@ -7,7 +7,7 @@ use ratatui::{
     Frame,
 };
 
-use crate::app::{AgentPanelMode, App};
+use crate::app::{AgentPanelMode, App, LayoutMode};
 use crate::tui::theme::*;
 use crate::tui::widgets::agent_monitor::{status_icon, status_label};
 
@@ -69,10 +69,15 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         AgentPanelMode::Sidebar => "Sidebar",
         AgentPanelMode::Hidden => "Off",
     };
+    let layout_display = match app.layout_mode {
+        LayoutMode::Bsp => "Split Tree",
+        LayoutMode::Strip => "Scrollable Strip",
+    };
 
     let mut rows: Vec<(&str, String)> = vec![
         ("Theme", theme_display),
         ("Sidebar", sidebar_display.to_string()),
+        ("Layout", layout_display.to_string()),
     ];
     if app.agent_fleet_enabled {
         rows.push(("Agent Panel", agent_display.to_string()));

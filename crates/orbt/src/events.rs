@@ -874,11 +874,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
     }
 
     if app.settings_open {
-        let num_settings = if app.agent_fleet_enabled {
-            3usize
-        } else {
-            2usize
-        };
+        let num_settings = if app.agent_fleet_enabled { 4 } else { 3 };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.settings_open = false;
@@ -903,7 +899,22 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                     app.needs_resize = true;
                     orbt_tui::app::save_settings(app);
                 }
-                2 if app.agent_fleet_enabled => {
+                2 => {
+                    app.layout_mode = match app.layout_mode {
+                        orbt_tui::app::LayoutMode::Bsp => orbt_tui::app::LayoutMode::Strip,
+                        orbt_tui::app::LayoutMode::Strip => orbt_tui::app::LayoutMode::Bsp,
+                    };
+                    // Apply to tabs that have not been split yet, and to the
+                    // current tab so the switch is visible straight away.
+                    let _ = writer
+                        .send(ClientMessage::SetTabLayout {
+                            layout: app.layout_mode.into(),
+                        })
+                        .await;
+                    app.needs_resize = true;
+                    orbt_tui::app::save_settings(app);
+                }
+                3 if app.agent_fleet_enabled => {
                     app.agent_panel_mode = app.agent_panel_mode.cycle();
                     orbt_tui::app::save_settings(app);
                 }
