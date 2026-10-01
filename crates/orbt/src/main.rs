@@ -37,18 +37,14 @@ async fn connect_local_with_autostart() -> Result<(
         return Ok((w, r, state));
     }
 
-    // A socket we cannot talk to is almost always an orbtd from an older
-    // build: it holds the lock, so a freshly spawned one exits immediately and
-    // its complaint (discarded via Stdio::null) never reaches the user.
-    let stale = orbt_protocol::default_socket_path().exists();
-    if stale {
-        anyhow::bail!(
-            "an orbtd is already listening on {} but refused the connection.\n\
-             It is most likely an older build — the wire format changed, so it and \
-             this client cannot talk. Restart it:\n\
-             \n    pkill -f 'orbt daemon'\n",
-            orbt_protocol::default_socket_path().display()
-        );
+    // A socket left behind by a daemon that is no longer running would
+    // otherwise wedge every later start: the file exists, the handshake cannot
+    // succeed, and the client keeps refusing. Clear it and try again, so a
+    // crashed or killed daemon costs one restart instead of a manual step.
+    let stale = orbt_protocol::default_socket_path();
+    if stale.exists() {
+        debug!("clearing socket left behind at {}", stale.display());
+        let _ = std::fs::remove_file(&stale);
     }
 
     debug!("orbtd not running, auto-starting daemon...");
@@ -72,7 +68,9 @@ async fn connect_local_with_autostart() -> Result<(
 
     anyhow::bail!(
         "started orbtd but it never accepted a connection within 2 s.\n\
-         Check its log with:  ORBT_LOG_LEVEL=debug orbt daemon"
+         Another build may already be listening on {}, in which case the two \
+         cannot talk. Check its log with:  ORBT_LOG_LEVEL=debug orbt daemon",
+        orbt_protocol::default_socket_path().display()
     );
 }
 
