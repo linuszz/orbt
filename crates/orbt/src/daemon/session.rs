@@ -1342,26 +1342,17 @@ impl SpaceManager {
         }
     }
 
-    /// Retag every single-pane tab with `layout`.
+    /// Move every open tab into `layout`.
     ///
-    /// A tab holding one pane has no user-chosen arrangement yet, so adopting
-    /// the configured layout is lossless: `Leaf` and a one-entry `Strip` render
-    /// identically. Tabs the user already split keep their current layout.
+    /// Each tab is rebuilt in place, so tabs the user has already split keep
+    /// all of their panes: a tree opens out into one column per pane, and a
+    /// strip folds back into a tree column by column.
     pub async fn apply_tab_layout(&self, layout: TabLayout) {
         let sessions: Vec<_> = self.spaces.read().await.values().cloned().collect();
         for session in sessions {
             let mut tabs = session.tabs.write().await;
             for tab in tabs.values_mut() {
-                let PaneLayout::Leaf(only) = tab.layout else {
-                    continue;
-                };
-                tab.layout = match layout {
-                    TabLayout::Bsp => PaneLayout::Leaf(only),
-                    TabLayout::Strip => PaneLayout::Strip {
-                        columns: vec![orbt_protocol::StripColumn::single(only)],
-                        column_width: 80,
-                    },
-                };
+                tab.layout = tab.layout.converted(layout);
             }
         }
     }
@@ -1532,16 +1523,74 @@ mod tests {
             tab.layout
         );
 
-        // A tab the user has already split keeps its arrangement.
+        // Asking for Bsp turns even a one-entry strip back into a tree.
         let active = state.spaces[0].tabs[0].id;
         mgr.apply_tab_layout(TabLayout::Bsp).await;
         let after = mgr.collect_full_state().await;
         assert!(
-            matches!(after.spaces[0].tabs[0].layout, PaneLayout::Strip { .. }),
-            "single-pane Strip round-trips back to Strip when asked for Bsp"
+            matches!(after.spaces[0].tabs[0].layout, PaneLayout::Leaf(_)),
+            "a single pane is a Leaf in either layout, got {:?}",
+            after.spaces[0].tabs[0].layout
         );
         assert_eq!(after.active_space, state.active_space);
         assert_eq!(after.spaces[0].tabs[0].id, active);
+    }
+
+    #[tokio::test]
+    async fn apply_tab_layout_converts_a_tab_the_user_already_split() {
+        use tokio::sync::broadcast;
+
+        let (event_bus, _rx) = broadcast::channel(16);
+        let shell = std::process::Command::new("which")
+            .arg("true")
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "/usr/bin/true".to_string());
+        let mgr = SpaceManager::new(event_bus, shell, "/tmp".into(), 80, 24)
+            .await
+            .expect("space manager");
+
+        let first = mgr.collect_full_state().await.spaces[0].tabs[0].id;
+        mgr.active_session()
+            .await
+            .split_pane(first, SplitDir::Horizontal)
+            .await
+            .expect("split the tab");
+        let panes = mgr.collect_full_state().await.spaces[0].tabs[0]
+            .layout
+            .leaves();
+        assert_eq!(panes.len(), 2, "the tab really has two panes now");
+
+        mgr.apply_tab_layout(TabLayout::Strip).await;
+        let state = mgr.collect_full_state().await;
+        let PaneLayout::Strip { columns, .. } = &state.spaces[0].tabs[0].layout else {
+            panic!(
+                "switching to a strip must reach a split tab, got {:?}",
+                state.spaces[0].tabs[0].layout
+            );
+        };
+        assert_eq!(columns.len(), 2, "each pane gets its own column");
+        assert_eq!(
+            columns
+                .iter()
+                .flat_map(|c| c.panes.clone())
+                .collect::<Vec<_>>(),
+            panes,
+            "no pane is dropped or reordered"
+        );
+
+        // And back again, so the switch is reversible.
+        mgr.apply_tab_layout(TabLayout::Bsp).await;
+        let back = mgr.collect_full_state().await;
+        assert!(
+            matches!(back.spaces[0].tabs[0].layout, PaneLayout::Split { .. }),
+            "a strip of two columns folds back into a split tree, got {:?}",
+            back.spaces[0].tabs[0].layout
+        );
+        assert_eq!(back.spaces[0].tabs[0].layout.leaves(), panes);
     }
 
     #[tokio::test]

@@ -399,6 +399,72 @@ impl PaneLayout {
         }
     }
 
+    /// Rebuild this layout in `target`, leaving every pane where the user can
+    /// still see it.
+    ///
+    /// A strip gives every pane a column of its own, so a tree collapses to one
+    /// pane per column in the order they were already arranged. Going the other
+    /// way, each column becomes a vertical chain and the chains are joined side
+    /// by side, which puts the panes back into the arrangement just described.
+    /// Asking for the layout a tab is already in changes nothing.
+    pub fn converted(&self, target: TabLayout) -> PaneLayout {
+        match (self, target) {
+            (PaneLayout::Strip { .. }, TabLayout::Strip)
+            | (PaneLayout::Split { .. }, TabLayout::Bsp)
+            | (PaneLayout::Leaf(_), TabLayout::Bsp) => self.clone(),
+            (_, TabLayout::Strip) => {
+                let columns = self.leaves().into_iter().map(StripColumn::single).collect();
+                PaneLayout::Strip {
+                    columns,
+                    column_width: default_strip_column_width(),
+                }
+            }
+            (PaneLayout::Strip { columns, .. }, TabLayout::Bsp) => {
+                let chains: Vec<PaneLayout> = columns
+                    .iter()
+                    .filter(|c| !c.panes.is_empty())
+                    .map(|c| Self::chain(&c.panes, SplitDir::Vertical))
+                    .collect();
+                Self::join(&chains)
+            }
+        }
+    }
+
+    /// Fold `panes` into a balanced tree along `direction`, halving at each
+    /// level so every pane ends up with the same share of the space.
+    fn chain(panes: &[PaneId], direction: SplitDir) -> PaneLayout {
+        match panes {
+            [] => PaneLayout::Leaf(PaneId(0)),
+            [only] => PaneLayout::Leaf(*only),
+            [..] => {
+                let mid = panes.len() / 2;
+                PaneLayout::Split {
+                    direction,
+                    first: Box::new(Self::chain(&panes[..mid], direction)),
+                    second: Box::new(Self::chain(&panes[mid..], direction)),
+                    ratio: mid as f32 / panes.len() as f32,
+                }
+            }
+        }
+    }
+
+    /// Join already-built trees into one, splitting them off sideways.
+    fn join(nodes: &[PaneLayout]) -> PaneLayout {
+        match nodes {
+            [] => PaneLayout::Leaf(PaneId(0)),
+            [only] => only.clone(),
+            [..] => {
+                let mid = nodes.len() / 2;
+                PaneLayout::Split {
+                    direction: SplitDir::Horizontal,
+                    first: Box::new(Self::join(&nodes[..mid])),
+                    second: Box::new(Self::join(&nodes[mid..])),
+                    ratio: mid as f32 / nodes.len() as f32,
+                }
+            }
+        }
+    }
+
     pub fn find_pane_in_direction(
         &self,
         current: PaneId,
@@ -746,6 +812,105 @@ fn strip_collapses_to_leaf_when_a_single_pane_remains() {
     layout.remove_leaf(PaneId(1));
     assert!(matches!(layout, PaneLayout::Leaf(_)), "one pane is a Leaf");
     assert_eq!(layout.leaves(), vec![PaneId(2)]);
+}
+
+#[cfg(test)]
+/// Every split ratio in a tree, left to right and top to bottom.
+fn split_ratios(node: &PaneLayout) -> Vec<f32> {
+    match node {
+        PaneLayout::Split {
+            first,
+            second,
+            ratio,
+            ..
+        } => {
+            let mut v = vec![*ratio];
+            v.extend(split_ratios(first));
+            v.extend(split_ratios(second));
+            v
+        }
+        _ => Vec::new(),
+    }
+}
+
+#[test]
+fn converting_a_tree_to_a_strip_gives_every_pane_a_column() {
+    let tree = PaneLayout::Split {
+        direction: SplitDir::Horizontal,
+        first: Box::new(PaneLayout::Split {
+            direction: SplitDir::Vertical,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+            ratio: 0.5,
+        }),
+        second: Box::new(PaneLayout::Leaf(PaneId(3))),
+        ratio: 0.5,
+    };
+
+    let PaneLayout::Strip { columns, .. } = tree.converted(TabLayout::Strip) else {
+        panic!("a tree should convert to a strip");
+    };
+    assert_eq!(columns.len(), 3, "one column per pane");
+    assert_eq!(
+        columns.iter().map(|c| c.panes.clone()).collect::<Vec<_>>(),
+        vec![vec![PaneId(1)], vec![PaneId(2)], vec![PaneId(3)]],
+        "columns keep the tree's visual order"
+    );
+}
+
+#[test]
+fn converting_a_strip_back_to_a_tree_restores_the_columns() {
+    let strip = PaneLayout::Strip {
+        columns: vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+        ],
+        column_width: 80,
+    };
+
+    let tree = strip.converted(TabLayout::Bsp);
+    assert!(matches!(tree, PaneLayout::Split { .. }));
+    assert_eq!(tree.leaves(), vec![PaneId(1), PaneId(2), PaneId(3)]);
+    assert_eq!(
+        split_ratios(&tree),
+        vec![0.5, 0.5],
+        "each pane gets an equal share, so the tree renders evenly"
+    );
+}
+
+#[test]
+fn converting_to_the_layout_already_in_use_changes_nothing() {
+    let tree = PaneLayout::Split {
+        direction: SplitDir::Vertical,
+        first: Box::new(PaneLayout::Leaf(PaneId(1))),
+        second: Box::new(PaneLayout::Leaf(PaneId(2))),
+        ratio: 0.7,
+    };
+    let strip = PaneLayout::Strip {
+        columns: vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+        ],
+        column_width: 42,
+    };
+
+    assert_eq!(
+        split_ratios(&tree.converted(TabLayout::Bsp)),
+        split_ratios(&tree)
+    );
+    let PaneLayout::Strip {
+        columns,
+        column_width,
+    } = strip.converted(TabLayout::Strip)
+    else {
+        panic!("stacking must survive asking for a strip again");
+    };
+    assert_eq!(column_width, 42, "the configured width is left alone");
+    assert_eq!(columns[0].panes, vec![PaneId(1), PaneId(2)]);
 }
 
 #[cfg(test)]
