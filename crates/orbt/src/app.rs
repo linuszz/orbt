@@ -806,8 +806,16 @@ impl App {
 
         if let Some(s) = space {
             for pane in &s.panes {
-                let mut ps = PaneState::new(pane.cell_grid.cols.max(1), pane.cell_grid.rows.max(1));
+                let cols_in = pane.cell_grid.cols.max(1);
+                let rows_in = pane.cell_grid.rows.max(1);
+                let mut ps = PaneState::new(cols_in, rows_in);
+                // Take the server's cells and the dimensions describing them
+                // together: setting `cells` alone leaves cols and rows still
+                // pointing at the freshly allocated buffer, and the mismatch
+                // makes the next resize read past the end of the shorter one.
                 ps.parser.grid.cells = pane.cell_grid.cells.clone();
+                ps.parser.grid.cols = cols_in;
+                ps.parser.grid.rows = rows_in;
                 ps.parser.grid.cursor_x = pane.cell_grid.cursor_x;
                 ps.parser.grid.cursor_y = pane.cell_grid.cursor_y;
                 // See sync_from_server: snapshot cursor_visible=false is unreliable.

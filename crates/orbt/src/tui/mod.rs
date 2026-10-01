@@ -47,6 +47,28 @@ pub fn restore_terminal(terminal: &mut OrbitTerminal) -> io::Result<()> {
     Ok(())
 }
 
+/// Put the terminal back the way we found it if anything unwinds past it.
+///
+/// `main` restores the terminal on the paths that return an error, but a panic
+/// skips that entirely: the process dies with raw mode still on and the
+/// alternate screen still active, leaving a shell that cannot be typed into and
+/// can only be escaped by closing the window. Unwinding runs this first, so the
+/// terminal is usable again and the panic message is readable.
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let mut stdout = io::stdout();
+        let _ = execute!(
+            stdout,
+            LeaveAlternateScreen,
+            DisableMouseCapture,
+            DisableBracketedPaste
+        );
+        let _ = disable_raw_mode();
+        previous(info);
+    }));
+}
+
 pub fn term_color(c: &TermColor) -> Color {
     match c {
         TermColor::Default => Color::Reset,

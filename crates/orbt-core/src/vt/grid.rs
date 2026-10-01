@@ -414,16 +414,32 @@ impl CellGrid {
     }
 
     pub fn resize(&mut self, new_cols: u16, new_rows: u16) {
+        // Every writer below indexes `cells` without a bounds check, on the
+        // assumption that a grid always has at least one cell. A pane clipped
+        // out of a scrollable strip reports a width of zero, and a zero-sized
+        // grid turns the next character the parser handles into a panic that
+        // leaves the terminal unusable. Keep the grid non-empty here, where the
+        // cells are reallocated, rather than guarding fifteen write sites.
+        let new_cols = new_cols.max(1);
+        let new_rows = new_rows.max(1);
         let old_cols = self.cols as usize;
         let new_cols_usize = new_cols as usize;
         let new_rows_usize = new_rows as usize;
         let mut new_cells = vec![Cell::default(); new_cols_usize * new_rows_usize];
+        // Copy from what is actually allocated rather than from `cols`, which a
+        // grid restored from a snapshot may not agree with.
+        let old_len = self.cells.len();
         let copy_rows = (self.rows as usize).min(new_rows_usize);
         let copy_cols = old_cols.min(new_cols_usize);
-        for r in 0..copy_rows {
-            let src = r * old_cols;
-            let dst = r * new_cols_usize;
-            new_cells[dst..dst + copy_cols].clone_from_slice(&self.cells[src..src + copy_cols]);
+        if old_len >= copy_cols {
+            for r in 0..copy_rows {
+                let src = r * old_cols;
+                let dst = r * new_cols_usize;
+                if src + copy_cols > old_len {
+                    break;
+                }
+                new_cells[dst..dst + copy_cols].clone_from_slice(&self.cells[src..src + copy_cols]);
+            }
         }
         self.cols = new_cols;
         self.rows = new_rows;
@@ -517,6 +533,33 @@ impl CellGrid {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resize_refuses_to_empty_a_grid() {
+        let mut grid = CellGrid::new(80, 24);
+        grid.resize(0, 0);
+        assert_eq!((grid.cols, grid.rows), (1, 1));
+        assert_eq!(grid.cells.len(), 1, "a grid always has a cell to write to");
+    }
+
+    #[test]
+    fn a_zero_sized_pane_can_still_render_a_character() {
+        // A pane clipped out of a scrollable strip reports a width of zero; the
+        // parser writing into it used to panic and take the terminal with it.
+        let mut grid = CellGrid::new(80, 24);
+        grid.resize(0, 0);
+        grid.put_char('x');
+        assert_eq!(grid.cells[0].ch, 'x');
+    }
+
+    #[test]
+    fn resize_recovers_from_a_grid_whose_cells_do_not_match_its_dimensions() {
+        let mut grid = CellGrid::new(80, 24);
+        grid.cells.clear();
+        grid.resize(40, 12);
+        assert_eq!(grid.cells.len(), 40 * 12);
+        assert_eq!((grid.cols, grid.rows), (40, 12));
+    }
 
     #[test]
     fn put_char_advances_cursor() {
