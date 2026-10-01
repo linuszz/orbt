@@ -84,10 +84,18 @@ fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layo
     let agent_w = agent_panel_width(term_cols, app.agent_panel_mode);
     let total_cols = term_cols.saturating_sub(sidebar_w + agent_w).max(20);
     let total_rows = term_rows.saturating_sub(3).max(5);
+    // A strip keeps a column free on each side for its scroll arrows, so they hold
+    // still while the band scrolls under them. Taking the space here rather than
+    // inside the renderer keeps hit testing and the pane geometry in step.
+    let (gutter, x) = if app.pane_tree().is_strip() && total_cols > 24 {
+        (1u16, sidebar_w + 1)
+    } else {
+        (0u16, sidebar_w)
+    };
     ratatui::layout::Rect {
-        x: sidebar_w,
+        x,
         y: 1,
-        width: total_cols,
+        width: total_cols.saturating_sub(gutter * 2).max(20),
         height: total_rows,
     }
 }
@@ -2510,7 +2518,11 @@ async fn handle_mouse(
 
     if app.show_overview {
         if mouse.kind == crossterm::event::MouseEventKind::Down(MouseButton::Left) {
-            let area = orbt_tui::tui::overview_area(content_area(term_size, app));
+            let band = content_area(term_size, app);
+            let area = orbt_tui::tui::overview_area(
+                band,
+                orbt_tui::tui::overview_tallest_column(app.pane_tree()),
+            );
             let cards = orbt_tui::tui::widgets::pane_overview::layout(
                 app.pane_tree(),
                 area,
@@ -2735,6 +2747,58 @@ async fn handle_mouse(
                             app.mode = InputMode::Normal;
                         }
                         app.needs_redraw = true;
+                        return;
+                    }
+                }
+            }
+
+            // The strip's arrows sit in the gutters beside the band, so this has
+            // to test them before the panes, which start one column in.
+            if app.zoomed_pane.is_none() && mouse.row == 1 {
+                let band = content_area(term_size, app);
+                if let orbt_protocol::PaneLayout::Strip {
+                    columns,
+                    column_width,
+                } = app.pane_tree()
+                {
+                    let effective = orbt_tui::tui::strip_solo_width(columns, *column_width, band);
+                    let scroll = orbt_tui::tui::strip_scroll_target(
+                        columns,
+                        effective,
+                        band,
+                        app.active_pane,
+                    );
+                    let arrows = orbt_tui::tui::strip_arrows(columns, effective, band, scroll);
+                    let hit = |spot: Option<ratatui::layout::Rect>| {
+                        spot.is_some_and(|r| {
+                            mouse.column >= r.x
+                                && mouse.column < r.x + r.width
+                                && mouse.row >= r.y
+                                && mouse.row < r.y + r.height
+                        })
+                    };
+                    let (step, live) = if hit(arrows.left) {
+                        (false, arrows.can_left)
+                    } else if hit(arrows.right) {
+                        (true, arrows.can_right)
+                    } else {
+                        (false, false)
+                    };
+                    if live {
+                        if let Some(target) = app.pane_tree().find_pane_in_direction(
+                            app.active_pane,
+                            SplitDir::Horizontal,
+                            step,
+                        ) {
+                            app.active_pane = target;
+                            app.needs_redraw = true;
+                            let _ = writer
+                                .send(ClientMessage::FocusPane {
+                                    tab_id: app.active_tab_id,
+                                    pane_id: target,
+                                })
+                                .await;
+                        }
                         return;
                     }
                 }

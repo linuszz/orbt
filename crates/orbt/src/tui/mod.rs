@@ -84,6 +84,65 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 /// §6.7 responsive agent panel width.
 /// Only Sidebar mode occupies layout columns; Modal floats and returns 0.
 /// Returns 0 when the fleet feature is disabled.
+/// A strip holding exactly one pane stretches it across the viewport.
+///
+/// A lone pane has nothing to tile against, so at its configured width it just
+/// sits there with the rest of the band empty, which reads as broken. Widening it
+/// leaves `column_width` alone, so opening a second pane brings it back to the
+/// configured width and the strip becomes what it is meant to be. The pane is
+/// resized to match, so nothing inside it is squeezed to fit.
+pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
+    if columns.len() != 1 || columns[0].panes.len() != 1 {
+        return column_width;
+    }
+    area.width.max(column_width)
+}
+
+/// Which way the strip can still move, and where its arrows go.
+///
+/// Each arrow is drawn dimmed when there is nothing that way, which is what
+/// tells you the band has an end.
+pub struct StripArrows {
+    pub left: Option<Rect>,
+    pub right: Option<Rect>,
+    pub can_left: bool,
+    pub can_right: bool,
+}
+
+pub fn strip_arrows(
+    columns: &[StripColumn],
+    column_width: u16,
+    band: Rect,
+    scroll: usize,
+) -> StripArrows {
+    let width = column_width.max(1) as usize;
+    let total = width * columns.len();
+    let viewport = band.width as usize;
+    let max_scroll = total.saturating_sub(viewport);
+    let can_left = scroll > 0;
+    let can_right = scroll < max_scroll;
+
+    // The arrows go in the gutters compute_pane_area reserved beside the band,
+    // which the caller has already trimmed, so they are just outside it.
+    let row = Rect {
+        x: band.x.saturating_sub(1),
+        y: band.y,
+        width: 1,
+        height: 1,
+    };
+    StripArrows {
+        left: can_left.then_some(row),
+        right: can_right.then_some(Rect {
+            x: band.x + band.width,
+            y: band.y,
+            width: 1,
+            height: 1,
+        }),
+        can_left,
+        can_right,
+    }
+}
+
 /// Where the "add pane" affordance sits inside the strip's area, if there is
 /// room to draw it.
 ///
@@ -115,16 +174,30 @@ pub fn strip_add_button(
     })
 }
 
-/// The strip leaves a margin around the cards so a wide band still reads as
-/// cards rather than as one crowded block.
-pub fn overview_area(area: Rect) -> Rect {
-    let w = area.width.saturating_sub(8).max(20);
-    let h = area.height.saturating_sub(4).max(6);
+/// The overview is a floating panel over the strip, not a replacement for it: it
+/// keeps a margin so the panes stay visible behind it, and it grows with the
+/// tallest column so a card is never squeezed below the point of being readable.
+pub fn overview_area(area: Rect, tallest_column: usize) -> Rect {
+    let max_w = area.width.saturating_sub(6).max(24);
+    let max_h = area.height.saturating_sub(4).max(8);
+    let want_h = (tallest_column as u16).saturating_mul(4).saturating_add(4);
+    let w = max_w.min(72.max(max_w));
+    let h = want_h.clamp(10, max_h);
     Rect {
         x: area.x + (area.width - w) / 2,
         y: area.y + (area.height - h) / 2,
         width: w,
         height: h,
+    }
+}
+
+/// Rows per card the overview aims for, so it can size itself before drawing.
+pub fn overview_tallest_column(node: &PaneLayout) -> usize {
+    match node {
+        PaneLayout::Strip { columns, .. } => {
+            columns.iter().map(|c| c.panes.len()).max().unwrap_or(1)
+        }
+        _ => 1,
     }
 }
 
@@ -271,7 +344,11 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     if app.show_overview {
-        widgets::pane_overview::render(frame, overview_area(area), app);
+        widgets::pane_overview::render(
+            frame,
+            overview_area(area, overview_tallest_column(app.pane_tree())),
+            app,
+        );
     }
 
     if app.show_help {
@@ -781,48 +858,32 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             columns,
             column_width,
         } => {
-            let scroll = strip_scroll_target(columns, *column_width, area, app.active_pane);
-            let areas = strip_areas_at(columns, *column_width, area, scroll);
+            let effective = strip_solo_width(columns, *column_width, area);
+            let scroll = strip_scroll_target(columns, effective, area, app.active_pane);
+            let areas = strip_areas_at(columns, effective, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
                 }
             }
-            // Overflow chevrons tell the user the strip continues past the edge.
-            let content = (*column_width as usize) * columns.len();
-            let viewport = area.width as usize;
-            let scrolled_right = content > viewport
-                && areas
-                    .iter()
-                    .rev()
-                    .find(|(_, r, _)| r.width > 0)
-                    .map(|(_, r, _)| r.x + r.width < area.x + area.width)
-                    .unwrap_or(false);
-            if areas.iter().any(|(_, r, _)| r.width == 0) {
-                frame.render_widget(
-                    Paragraph::new("‹").style(Style::default().fg(accent_idle())),
-                    Rect {
-                        x: area.x,
-                        y: area.y,
-                        width: 1,
-                        height: 1,
-                    },
-                );
-            }
-            if scrolled_right {
-                frame.render_widget(
-                    Paragraph::new("›").style(Style::default().fg(accent_idle())),
-                    Rect {
-                        x: area.x + area.width.saturating_sub(1),
-                        y: area.y,
-                        width: 1,
-                        height: 1,
-                    },
-                );
+            // Arrows mark the ends of the band and carry the movement, so a
+            // strip is something you drive rather than something you discover.
+            let arrows = strip_arrows(columns, effective, area, scroll);
+            for (spot, glyph, live) in [
+                (arrows.left, "\u{2039}", arrows.can_left),
+                (arrows.right, "\u{203a}", arrows.can_right),
+            ] {
+                if let Some(spot) = spot {
+                    let colour = if live { accent_idle() } else { fg_muted() };
+                    frame.render_widget(
+                        Paragraph::new(glyph).style(Style::default().fg(colour)),
+                        spot,
+                    );
+                }
             }
             // A lone pane leaves the rest of the band empty, which reads as
             // broken rather than as room to grow. The plus is the invitation.
-            if let Some(spot) = strip_add_button(columns, *column_width, area, scroll) {
+            if let Some(spot) = strip_add_button(columns, effective, area, scroll) {
                 frame.render_widget(
                     Paragraph::new("+")
                         .style(Style::default().fg(accent_idle()))
@@ -1815,6 +1876,113 @@ mod tests {
             height: 20,
         };
         assert_eq!(strip_add_button(&columns, 80, area, 160), None);
+    }
+
+    #[test]
+    fn a_lone_pane_fills_the_band_and_a_pair_keeps_the_configured_width() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 20,
+        };
+        let alone = vec![StripColumn::single(PaneId(1))];
+        assert_eq!(
+            strip_solo_width(&alone, 80, area),
+            200,
+            "one pane takes the whole band rather than looking stranded"
+        );
+
+        let pair = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+        ];
+        assert_eq!(
+            strip_solo_width(&pair, 80, area),
+            80,
+            "two panes go back to the configured width"
+        );
+
+        let stacked = vec![StripColumn {
+            panes: vec![PaneId(1), PaneId(2)],
+        }];
+        assert_eq!(
+            strip_solo_width(&stacked, 80, area),
+            80,
+            "a column of stacked panes is already using the height it was given"
+        );
+    }
+
+    #[test]
+    fn arrows_appear_only_where_the_band_can_move() {
+        let columns = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ];
+        let band = Rect {
+            x: 1,
+            y: 1,
+            width: 100,
+            height: 20,
+        };
+
+        let at_start = strip_arrows(&columns, 80, band, 0);
+        assert!(!at_start.can_left, "nothing before the first column");
+        assert!(at_start.can_right);
+        assert_eq!(at_start.left, None, "a dead arrow is not drawn");
+        assert_eq!(
+            at_start.right.map(|r| r.x),
+            Some(band.x + band.width),
+            "the arrow sits in the gutter just past the band"
+        );
+
+        let at_end = strip_arrows(&columns, 80, band, 140);
+        assert!(at_end.can_left);
+        assert!(!at_end.can_right);
+        assert_eq!(at_end.right, None);
+        assert_eq!(
+            at_end.left.map(|r| r.x),
+            band.x.checked_sub(1),
+            "and in the gutter just before it"
+        );
+
+        let everything_fits = strip_arrows(&columns[..1], 80, band, 0);
+        assert!(
+            !everything_fits.can_left && !everything_fits.can_right,
+            "a band that fits has no arrows at all"
+        );
+    }
+
+    #[test]
+    fn the_overview_is_a_panel_with_the_strip_left_visible() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 200,
+            height: 50,
+        };
+        let panel = overview_area(area, 1);
+        assert!(panel.width < area.width, "not full screen");
+        assert!(panel.height < area.height);
+        assert!(
+            panel.width >= 24 && panel.height >= 10,
+            "but still readable"
+        );
+        assert!(
+            panel.x > area.x && panel.x + panel.width < area.x + area.width,
+            "centred, with the strip showing on both sides"
+        );
+
+        let tall = overview_area(area, 8);
+        assert!(
+            tall.height > panel.height,
+            "a taller column needs a taller panel"
+        );
+        assert!(
+            tall.height <= area.height,
+            "but it never takes the whole area"
+        );
     }
 
     #[test]

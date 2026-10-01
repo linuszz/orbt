@@ -384,6 +384,10 @@ impl PaneLayout {
         }
     }
 
+    pub fn is_strip(&self) -> bool {
+        matches!(self, PaneLayout::Strip { .. })
+    }
+
     pub fn leaves(&self) -> Vec<PaneId> {
         match self {
             PaneLayout::Leaf(id) => vec![*id],
