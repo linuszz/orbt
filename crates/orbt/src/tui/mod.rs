@@ -760,12 +760,26 @@ pub fn strip_scroll_resolve(
     let Some(focus_col) = columns.iter().position(|c| c.panes.contains(&focus)) else {
         return scroll;
     };
-    let first = scroll / width;
-    let last = (scroll + viewport).saturating_sub(1) / width;
-    if focus_col >= first && focus_col <= last {
+
+    // Ask where the pane actually lands rather than which whole columns the
+    // viewport covers. Dividing by the column width counts a pane showing a
+    // sliver as fully visible, so crossing from a stacked column to the next one
+    // could leave the band where it was and then shift it by a column the moment
+    // the numbers rounded the other way — a one cell jog that had no cause the
+    // user could point at.
+    let pane_left = focus_col * width;
+    let pane_right = pane_left + width;
+    let view_left = scroll;
+    let view_right = scroll + viewport;
+    if pane_left >= view_left && pane_right <= view_right {
         return scroll;
     }
-    (focus_col * width).min(max_scroll)
+    // Bring the pane fully into view, preferring the side it was already on.
+    if pane_left < view_left {
+        pane_left
+    } else {
+        (pane_right - viewport).min(max_scroll)
+    }
 }
 
 /// The furthest the band can be scrolled.
@@ -2175,25 +2189,22 @@ mod tests {
         let after_focus = strip_scroll_resolve(&columns, 80, 100, 80, PaneId(2));
         assert_eq!(after_focus, 80, "pane two is visible, so nothing moves");
 
-        // Column three starts at 160 and the viewport reaches 180, so it is already
-        // partly showing and the band stays put.
-        assert_eq!(strip_scroll_resolve(&columns, 80, 100, 80, PaneId(3)), 80);
+        // Column three starts at 160 and the viewport reaches 180, so a sliver of it
+        // is showing. That is not the same as being readable, so the band pulls it
+        // the rest of the way in; leaving it would be the one cell jog.
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, 100, 80, PaneId(3)),
+            140,
+            "a sliver counts as off screen"
+        );
         assert_eq!(strip_scroll_resolve(&columns, 80, 100, 0, PaneId(1)), 0);
 
-        // Only a pane with no part of it on screen drags the viewport.
-        let narrow = [PaneId(1), PaneId(2), PaneId(3)];
-        assert_eq!(
-            strip_scroll_resolve(&columns, 80, 40, 0, PaneId(3)),
-            160,
-            "with a 40 wide viewport the third column cannot be seen at all"
-        );
-        assert_eq!(narrow.len(), 3);
-
-        // Looking past the end without focusing anything is allowed to sit there.
+        // A pane the user scrolled away from is not dragged back by resolving, but
+        // the focus it names is: resolution only ever moves towards the focus.
         assert_eq!(
             strip_scroll_resolve(&columns, 80, 100, max, PaneId(1)),
             0,
-            "the focus was scrolled off screen, so the band goes to it"
+            "the focused pane was scrolled off screen, so the band goes back to it"
         );
     }
 
@@ -2224,6 +2235,83 @@ mod tests {
             !alone.can_back && !alone.can_forward,
             "one pane has nothing to cycle to, so both arrows are dark"
         );
+    }
+
+    #[test]
+    fn crossing_from_a_stacked_column_to_the_next_one_does_not_jog_the_band() {
+        // A viewport that is an exact multiple of the column width is where whole
+        // column arithmetic rounds: three 80 wide columns in 160 cells shows two
+        // of them exactly, and the third is entirely off screen.
+        let columns = vec![
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            },
+            StripColumn::single(PaneId(3)),
+            StripColumn::single(PaneId(4)),
+        ];
+        let viewport = 160u16;
+
+        assert_eq!(strip_scroll_max(&columns, 80, viewport), 80);
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, viewport, 0, PaneId(2)),
+            0,
+            "the stacked column is showing, so nothing moves"
+        );
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, viewport, 0, PaneId(3)),
+            0,
+            "the middle column is on screen too"
+        );
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, viewport, 0, PaneId(4)),
+            80,
+            "only the third column is off screen, so only then does the band move"
+        );
+
+        // And coming back does not overshoot either.
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, viewport, 80, PaneId(1)),
+            0
+        );
+    }
+
+    #[test]
+    fn a_pane_showing_a_sliver_counts_as_off_screen() {
+        // 176 cells against 80 wide columns: the third column has sixteen cells
+        // showing, which is not the same as being visible.
+        let columns = cols3();
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, 176, 0, PaneId(3)),
+            64,
+            "a sliver is not enough, so the band pulls it fully into view"
+        );
+    }
+
+    #[test]
+    fn a_band_pulled_into_view_lands_on_a_column_boundary() {
+        // Pulling the band so a sliver of a pane becomes fully visible should land
+        // somewhere a column edge lines up, not at an arbitrary offset, or the
+        // panes sit between the columns the reader is counting.
+        let columns = cols3();
+        for viewport in [160u16, 176, 178, 200, 240] {
+            for focus in [PaneId(1), PaneId(2), PaneId(3)] {
+                for start in [0usize, 40, 64, 80] {
+                    let settled = strip_scroll_resolve(&columns, 80, viewport, start, focus);
+                    assert!(
+                        settled <= strip_scroll_max(&columns, 80, viewport),
+                        "viewport {viewport} focus {focus:?}: {settled} past the end"
+                    );
+                    // Repeated resolution has to be a fixed point, or the band
+                    // would drift a little on every focus change.
+                    let again = strip_scroll_resolve(&columns, 80, viewport, settled, focus);
+                    assert_eq!(
+                        again, settled,
+                        "viewport {viewport} focus {focus:?} start {start}: \
+                         resolving twice moved it from {settled} to {again}"
+                    );
+                }
+            }
+        }
     }
 
     #[test]
