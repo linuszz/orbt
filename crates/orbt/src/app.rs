@@ -1182,21 +1182,32 @@ impl App {
         &self.tabs[self.active_tab].name
     }
 
-    pub fn cycle_focus(&mut self, backwards: bool) {
-        let leaves = self.pane_tree().leaves();
+    /// The pane `backwards` from `from` in reading order, wrapping at the ends.
+    ///
+    /// Shared by the `f`/`F` commands, the palette's left and right, and the
+    /// overview, so every one of them agrees on what "the next pane" means.
+    pub fn cycle_pane_from(
+        node: &orbt_protocol::PaneLayout,
+        from: PaneId,
+        backwards: bool,
+    ) -> Option<PaneId> {
+        let leaves = node.leaves();
         if leaves.len() < 2 {
-            return;
+            return None;
         }
-        let idx = leaves
-            .iter()
-            .position(|&p| p == self.active_pane)
-            .unwrap_or(0);
+        let idx = leaves.iter().position(|&p| p == from).unwrap_or(0);
         let next = if backwards {
             (idx + leaves.len() - 1) % leaves.len()
         } else {
             (idx + 1) % leaves.len()
         };
-        self.active_pane = leaves[next];
+        leaves.get(next).copied()
+    }
+
+    pub fn cycle_focus(&mut self, backwards: bool) {
+        if let Some(next) = Self::cycle_pane_from(self.pane_tree(), self.active_pane, backwards) {
+            self.active_pane = next;
+        }
         self.needs_redraw = true;
     }
 
@@ -1849,6 +1860,34 @@ pub mod tests {
 
         app.prev_tab();
         assert_eq!(app.active_tab, 1); // wraps backward
+    }
+
+    #[test]
+    fn cycling_wraps_around_the_ends() {
+        let node = PaneLayout::Strip {
+            columns: vec![
+                orbt_protocol::StripColumn::single(PaneId(1)),
+                orbt_protocol::StripColumn {
+                    panes: vec![PaneId(2), PaneId(3)],
+                },
+            ],
+            column_width: 80,
+        };
+        // Reading order: column by column, top to bottom inside a column.
+        assert_eq!(
+            node.leaves(),
+            vec![PaneId(1), PaneId(2), PaneId(3)],
+            "the order the arrows and f walk"
+        );
+        let step = |from, back| App::cycle_pane_from(&node, from, back);
+        assert_eq!(step(PaneId(1), false), Some(PaneId(2)));
+        assert_eq!(step(PaneId(3), false), Some(PaneId(1)), "forwards wraps");
+        assert_eq!(step(PaneId(1), true), Some(PaneId(3)), "backwards wraps");
+        assert_eq!(
+            App::cycle_pane_from(&PaneLayout::Leaf(PaneId(1)), PaneId(1), false),
+            None,
+            "one pane has no next"
+        );
     }
 
     #[test]

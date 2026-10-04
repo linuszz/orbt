@@ -456,7 +456,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         ("  \"", "split pane vertical (top/bottom)"),
         ("  x", "close current pane"),
         ("  f / F", "cycle pane focus forward / back"),
-        ("  ← →", "focus pane left / right"),
+        ("  ← →", "cycle pane focus (same as f / F)"),
         ("  ⇧↑ ⇧↓", "focus pane above / below"),
         ("  o", "strip overview (click a pane to focus)"),
         ("  mouse", "click ◀ ▶ to scroll, ▦ for overview, + to add"),

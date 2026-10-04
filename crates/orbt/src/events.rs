@@ -1073,19 +1073,9 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                 };
                 let layout = &tab.pane_tree;
                 let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-                // Left and right move between panes; up and down belong to the
-                // list, so reaching a pane stacked above or below takes Shift.
-                let target = match key.code {
-                    KeyCode::Left => layout.find_pane_in_direction(
-                        app.active_pane,
-                        orbt_protocol::SplitDir::Horizontal,
-                        false,
-                    ),
-                    KeyCode::Right => layout.find_pane_in_direction(
-                        app.active_pane,
-                        orbt_protocol::SplitDir::Horizontal,
-                        true,
-                    ),
+                // Up and down belong to the list, so reaching a pane stacked above
+                // or below takes Shift.
+                let vertical = match key.code {
                     KeyCode::Up if shift => layout.find_pane_in_direction(
                         app.active_pane,
                         orbt_protocol::SplitDir::Vertical,
@@ -1097,6 +1087,22 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         true,
                     ),
                     _ => None,
+                };
+                // Left and right cycle, the same as f and F, so every way of
+                // changing pane agrees on where "next" ends: at the last one rather
+                // than nowhere.
+                let cycle = match key.code {
+                    KeyCode::Left => Some(true),
+                    KeyCode::Right => Some(false),
+                    _ => None,
+                };
+                let target = if let Some(v) = vertical {
+                    Some(v)
+                } else {
+                    let current = app.active_pane;
+                    cycle.and_then(|backwards| {
+                        orbt_tui::app::App::cycle_pane_from(layout, current, backwards)
+                    })
                 };
                 if let Some(target_pane) = target {
                     app.active_pane = target_pane;
