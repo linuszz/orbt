@@ -779,7 +779,6 @@ pub fn strip_nav(
     column_width: u16,
     columns: &[StripColumn],
     scroll: usize,
-    focus: PaneId,
 ) -> StripNav {
     let bar = Rect {
         x: area.x,
@@ -825,15 +824,12 @@ pub fn strip_nav(
     let viewport = area.width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
     let scroll = scroll.min(max_scroll);
-    // The arrows mean "the pane that way", so they are live whenever there is one,
-    // which is not the same as "the band can still scroll": near the end of a band
-    // the viewport is already pinned while panes remain to the right.
-    let focus_col = columns
-        .iter()
-        .position(|c| c.panes.contains(&focus))
-        .unwrap_or(0);
-    let can_back = focus_col > 0;
-    let can_forward = focus_col + 1 < columns.len();
+    // The arrows cycle through every pane and wrap at the ends, so with more than
+    // one pane both are always live. Damping them from the scroll offset was wrong
+    // twice over: a pinned viewport still has panes to the right, and a cycle never
+    // runs out.
+    let can_back = columns.iter().map(|c| c.panes.len()).sum::<usize>() > 1;
+    let can_forward = can_back;
 
     // The rail stands for the whole band and the lit run for the part on screen,
     // so the bar says where the strip is and how much of it is left without the
@@ -872,9 +868,8 @@ fn render_strip_nav(
     column_width: u16,
     area: Rect,
     scroll: usize,
-    focus: PaneId,
 ) {
-    let nav = strip_nav(area, column_width, columns, scroll, focus);
+    let nav = strip_nav(area, column_width, columns, scroll);
     if nav.bar.width < 8 || nav.track.width == 0 {
         return;
     }
@@ -1022,7 +1017,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
                 }
             }
-            render_strip_nav(frame, columns, effective, area, scroll, app.active_pane);
+            render_strip_nav(frame, columns, effective, area, scroll);
         }
         PaneLayout::Split {
             direction,
@@ -1978,7 +1973,7 @@ mod tests {
             width: 100,
             height: 20,
         };
-        let nav = strip_nav(area, 80, &cols3(), 0, PaneId(1));
+        let nav = strip_nav(area, 80, &cols3(), 0);
         assert_eq!(nav.bar.y, 21, "one row below the panes, not beside them");
         assert_eq!(nav.back.x, area.x);
         assert_eq!(nav.add.x, area.x + area.width - 1);
@@ -2115,31 +2110,31 @@ mod tests {
             width: 100,
             height: 10,
         };
-        let nav = strip_nav(area, 80, &cols3(), 0, PaneId(1));
+        let nav = strip_nav(area, 80, &cols3(), 0);
         assert!(nav.window.x >= nav.track.x);
         assert!(nav.window.x + nav.window.width <= nav.track.x + nav.track.width);
         assert!(
-            !nav.can_back,
-            "at the left end there is nowhere to go back to"
+            nav.can_back && nav.can_forward,
+            "cycling wraps, so both arrows are live wherever the viewport sits"
         );
-        assert!(nav.can_forward);
 
-        let many = strip_nav(
-            area,
-            20,
-            &vec![StripColumn::single(PaneId(1)); 20],
-            0,
-            PaneId(1),
-        );
+        let many = strip_nav(area, 20, &vec![StripColumn::single(PaneId(1)); 20], 0);
         assert!(
             many.window.width < nav.window.width,
             "more panes means the visible slice is a smaller share of the bar"
         );
 
-        let at_end = strip_nav(area, 80, &cols3(), 140, PaneId(3));
-        assert!(at_end.can_back && !at_end.can_forward);
+        let at_end = strip_nav(area, 80, &cols3(), 140);
+        assert!(
+            at_end.can_back && at_end.can_forward,
+            "still live at the end of the band, because both wrap"
+        );
+        assert!(
+            at_end.window.x > nav.window.x,
+            "while the lit run has moved along the rail"
+        );
 
-        let forward_at_start = strip_nav(area, 80, &cols3(), 0, PaneId(1));
+        let forward_at_start = strip_nav(area, 80, &cols3(), 0);
         assert_eq!(
             forward_at_start.window.x, forward_at_start.track.x,
             "at the left end the lit run starts at the rail"
@@ -2154,7 +2149,7 @@ mod tests {
             width: 200,
             height: 10,
         };
-        let nav = strip_nav(area, 80, &[StripColumn::single(PaneId(1))], 0, PaneId(1));
+        let nav = strip_nav(area, 80, &[StripColumn::single(PaneId(1))], 0);
         assert_eq!(nav.window.width, nav.track.width);
         assert!(!nav.can_back && !nav.can_forward, "nothing to move");
         assert_eq!(
@@ -2203,7 +2198,7 @@ mod tests {
     }
 
     #[test]
-    fn the_arrows_offer_the_pane_that_way_not_more_scrolling() {
+    fn the_arrows_stay_live_because_a_cycle_never_runs_out() {
         let cols = cols3();
         let area = Rect {
             x: 24,
@@ -2211,24 +2206,24 @@ mod tests {
             width: 176,
             height: 20,
         };
-        // Three 80 wide columns in a 176 wide viewport: the band can only scroll
-        // 64 columns, so focus on the second and third columns sit at the same
-        // pinned offset while there is still a pane to the right.
-        let pinned = strip_nav(area, 80, &cols, 64, PaneId(2));
+        // At the last pane the viewport is pinned, and at the first it is at the
+        // start. Both arrows stay live either way, since both wrap.
+        let at_end = strip_nav(area, 80, &cols, 64);
         assert!(
-            pinned.can_forward,
-            "a pane remains to the right even though the viewport cannot move"
+            at_end.can_forward,
+            "forward from the last pane wraps to the first"
         );
-        let at_end = strip_nav(area, 80, &cols, 64, PaneId(3));
-        assert!(!at_end.can_forward, "the last pane has nothing after it");
-        assert!(at_end.can_back);
+        let at_start = strip_nav(area, 80, &cols, 0);
+        assert!(
+            at_start.can_back,
+            "back from the first pane wraps to the last"
+        );
 
-        let at_start = strip_nav(area, 80, &cols, 0, PaneId(1));
+        let alone = strip_nav(area, 80, &[StripColumn::single(PaneId(1))], 0);
         assert!(
-            !at_start.can_back,
-            "the first pane has nothing before it, however much room the band has"
+            !alone.can_back && !alone.can_forward,
+            "one pane has nothing to cycle to, so both arrows are dark"
         );
-        assert!(at_start.can_forward);
     }
 
     #[test]

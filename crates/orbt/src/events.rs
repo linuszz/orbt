@@ -2778,32 +2778,27 @@ async fn handle_mouse(
                         app.strip_scroll,
                         focus,
                     );
-                    let nav =
-                        orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll, focus);
+                    let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
                     let on = |r: ratatui::layout::Rect| mouse.column == r.x && mouse.row == r.y;
                     let max_scroll =
                         orbt_tui::tui::strip_scroll_max(columns, effective, band.width);
                     let tab_id = app.active_tab_id;
 
-                    // The arrows move to the neighbouring pane, the same as the
-                    // keyboard does, and the band follows only if that pane was out
-                    // of sight. Scrolling instead would have made an arrow mean
-                    // something the rest of the interface does not: at the end of a
-                    // band the viewport is pinned while panes remain to the right,
-                    // so a scroll there did nothing at all.
+                    // The arrows cycle, the same as the palette's left and right and
+                    // the f key, so every control that changes pane agrees on what
+                    // "next" is and wraps at the ends.
                     let step = if on(nav.back) && nav.can_back {
-                        Some(false)
-                    } else if on(nav.forward) && nav.can_forward {
                         Some(true)
+                    } else if on(nav.forward) && nav.can_forward {
+                        Some(false)
                     } else {
                         None
                     };
-                    if let Some(forward) = step {
-                        if let Some(target) = app.pane_tree().find_pane_in_direction(
-                            focus,
-                            SplitDir::Horizontal,
-                            forward,
-                        ) {
+                    if let Some(backwards) = step {
+                        let current = app.active_pane;
+                        if let Some(target) =
+                            orbt_tui::app::App::cycle_pane_from(app.pane_tree(), current, backwards)
+                        {
                             app.active_pane = target;
                             app.needs_redraw = true;
                             let _ = writer
