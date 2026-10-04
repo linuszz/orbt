@@ -769,18 +769,18 @@ pub fn strip_scroll_resolve(
 }
 
 /// The furthest the band can be scrolled.
-/// How far one press of an arrow moves the band. Half a viewport, so every
-/// press visibly changes the view even when little of the band is left.
-pub fn strip_scroll_step(viewport_width: u16) -> usize {
-    (viewport_width / 2).max(1) as usize
-}
-
 pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
     let total = (column_width.max(1) as usize) * columns.len();
     total.saturating_sub(area_width.max(1) as usize)
 }
 
-pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usize) -> StripNav {
+pub fn strip_nav(
+    area: Rect,
+    column_width: u16,
+    columns: &[StripColumn],
+    scroll: usize,
+    focus: PaneId,
+) -> StripNav {
     let bar = Rect {
         x: area.x,
         y: area.y + area.height,
@@ -821,10 +821,19 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
     };
 
     let width = column_width.max(1) as usize;
-    let total = width * column_count.max(1);
+    let total = width * columns.len().max(1);
     let viewport = area.width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
     let scroll = scroll.min(max_scroll);
+    // The arrows mean "the pane that way", so they are live whenever there is one,
+    // which is not the same as "the band can still scroll": near the end of a band
+    // the viewport is already pinned while panes remain to the right.
+    let focus_col = columns
+        .iter()
+        .position(|c| c.panes.contains(&focus))
+        .unwrap_or(0);
+    let can_back = focus_col > 0;
+    let can_forward = focus_col + 1 < columns.len();
 
     // The rail stands for the whole band and the lit run for the part on screen,
     // so the bar says where the strip is and how much of it is left without the
@@ -852,8 +861,8 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
         overview,
         track,
         window,
-        can_back: scroll > 0,
-        can_forward: scroll < max_scroll,
+        can_back,
+        can_forward,
     }
 }
 
@@ -863,8 +872,9 @@ fn render_strip_nav(
     column_width: u16,
     area: Rect,
     scroll: usize,
+    focus: PaneId,
 ) {
-    let nav = strip_nav(area, column_width, columns.len(), scroll);
+    let nav = strip_nav(area, column_width, columns, scroll, focus);
     if nav.bar.width < 8 || nav.track.width == 0 {
         return;
     }
@@ -1012,7 +1022,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
                 }
             }
-            render_strip_nav(frame, columns, effective, area, scroll);
+            render_strip_nav(frame, columns, effective, area, scroll, app.active_pane);
         }
         PaneLayout::Split {
             direction,
@@ -1952,6 +1962,14 @@ mod tests {
         );
     }
 
+    fn cols3() -> Vec<StripColumn> {
+        vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ]
+    }
+
     #[test]
     fn the_bar_hands_out_reachable_cells_and_never_touches_the_panes() {
         let area = Rect {
@@ -1960,7 +1978,7 @@ mod tests {
             width: 100,
             height: 20,
         };
-        let nav = strip_nav(area, 80, 3, 0);
+        let nav = strip_nav(area, 80, &cols3(), 0, PaneId(1));
         assert_eq!(nav.bar.y, 21, "one row below the panes, not beside them");
         assert_eq!(nav.back.x, area.x);
         assert_eq!(nav.add.x, area.x + area.width - 1);
@@ -2097,7 +2115,7 @@ mod tests {
             width: 100,
             height: 10,
         };
-        let nav = strip_nav(area, 80, 3, 0);
+        let nav = strip_nav(area, 80, &cols3(), 0, PaneId(1));
         assert!(nav.window.x >= nav.track.x);
         assert!(nav.window.x + nav.window.width <= nav.track.x + nav.track.width);
         assert!(
@@ -2106,16 +2124,22 @@ mod tests {
         );
         assert!(nav.can_forward);
 
-        let many = strip_nav(area, 20, 20, 0);
+        let many = strip_nav(
+            area,
+            20,
+            &vec![StripColumn::single(PaneId(1)); 20],
+            0,
+            PaneId(1),
+        );
         assert!(
             many.window.width < nav.window.width,
             "more panes means the visible slice is a smaller share of the bar"
         );
 
-        let at_end = strip_nav(area, 80, 3, 140);
+        let at_end = strip_nav(area, 80, &cols3(), 140, PaneId(3));
         assert!(at_end.can_back && !at_end.can_forward);
 
-        let forward_at_start = strip_nav(area, 80, 3, 0);
+        let forward_at_start = strip_nav(area, 80, &cols3(), 0, PaneId(1));
         assert_eq!(
             forward_at_start.window.x, forward_at_start.track.x,
             "at the left end the lit run starts at the rail"
@@ -2130,7 +2154,7 @@ mod tests {
             width: 200,
             height: 10,
         };
-        let nav = strip_nav(area, 80, 1, 0);
+        let nav = strip_nav(area, 80, &[StripColumn::single(PaneId(1))], 0, PaneId(1));
         assert_eq!(nav.window.width, nav.track.width);
         assert!(!nav.can_back && !nav.can_forward, "nothing to move");
         assert_eq!(
@@ -2179,27 +2203,32 @@ mod tests {
     }
 
     #[test]
-    fn an_arrow_press_always_moves_the_band_further_than_the_slack_at_the_end() {
-        // Three 80 wide columns in a 176 wide viewport, which is what a 200 column
-        // terminal with the sidebar open gives.
-        let columns = vec![
-            StripColumn::single(PaneId(1)),
-            StripColumn::single(PaneId(2)),
-            StripColumn::single(PaneId(3)),
-        ];
-        let viewport = 176u16;
-        let max_scroll = strip_scroll_max(&columns, 80, viewport);
-        assert_eq!(max_scroll, 64, "only 64 columns of travel left");
-
-        let step = strip_scroll_step(viewport);
-        assert_eq!(step, 88, "half a viewport");
-        let moved = step.min(max_scroll);
-        assert_eq!(
-            moved, 64,
-            "so the press travels the whole remainder rather than a fraction of a \
-             column that would look like nothing happened"
+    fn the_arrows_offer_the_pane_that_way_not_more_scrolling() {
+        let cols = cols3();
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 176,
+            height: 20,
+        };
+        // Three 80 wide columns in a 176 wide viewport: the band can only scroll
+        // 64 columns, so focus on the second and third columns sit at the same
+        // pinned offset while there is still a pane to the right.
+        let pinned = strip_nav(area, 80, &cols, 64, PaneId(2));
+        assert!(
+            pinned.can_forward,
+            "a pane remains to the right even though the viewport cannot move"
         );
-        assert!(max_scroll < step, "the whole remainder is one press");
+        let at_end = strip_nav(area, 80, &cols, 64, PaneId(3));
+        assert!(!at_end.can_forward, "the last pane has nothing after it");
+        assert!(at_end.can_back);
+
+        let at_start = strip_nav(area, 80, &cols, 0, PaneId(1));
+        assert!(
+            !at_start.can_back,
+            "the first pane has nothing before it, however much room the band has"
+        );
+        assert!(at_start.can_forward);
     }
 
     #[test]

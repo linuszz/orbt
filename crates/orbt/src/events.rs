@@ -2755,6 +2755,7 @@ async fn handle_mouse(
                     column_width,
                 } = app.pane_tree()
                 {
+                    let columns_clone = columns.clone();
                     let (effective, count, firsts) = (
                         orbt_tui::tui::strip_solo_width(columns, *column_width, band),
                         columns.len(),
@@ -2771,34 +2772,41 @@ async fn handle_mouse(
                         app.strip_scroll,
                         focus,
                     );
-                    let nav = orbt_tui::tui::strip_nav(band, effective, count, scroll);
+                    let nav =
+                        orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll, focus);
                     let on = |r: ratatui::layout::Rect| mouse.column == r.x && mouse.row == r.y;
                     let max_scroll =
                         orbt_tui::tui::strip_scroll_max(columns, effective, band.width);
                     let tab_id = app.active_tab_id;
 
-                    // The arrows move the viewport. They deliberately do not move
-                    // the focus: scrolling is looking along the band, and tying the
-                    // two together meant an arrow either did nothing or dragged the
-                    // selection out from under the user.
-                    //
-                    // The step is most of a viewport rather than one column, because
-                    // stepping by a column is often smaller than the slack left at
-                    // the end of the band: three columns in a viewport two and a bit
-                    // wide leave sixteen columns of travel, so a column-sized step
-                    // moved the band less than the width of the pane already on
-                    // screen and read as nothing happening.
-                    let step = orbt_tui::tui::strip_scroll_step(band.width);
-                    let target_scroll: Option<usize> = if on(nav.back) && nav.can_back {
-                        Some(scroll.saturating_sub(step))
+                    // The arrows move to the neighbouring pane, the same as the
+                    // keyboard does, and the band follows only if that pane was out
+                    // of sight. Scrolling instead would have made an arrow mean
+                    // something the rest of the interface does not: at the end of a
+                    // band the viewport is pinned while panes remain to the right,
+                    // so a scroll there did nothing at all.
+                    let step = if on(nav.back) && nav.can_back {
+                        Some(false)
                     } else if on(nav.forward) && nav.can_forward {
-                        Some((scroll + step).min(max_scroll))
+                        Some(true)
                     } else {
                         None
                     };
-                    if let Some(next) = target_scroll {
-                        app.strip_scroll = next;
-                        app.needs_redraw = true;
+                    if let Some(forward) = step {
+                        if let Some(target) = app.pane_tree().find_pane_in_direction(
+                            focus,
+                            SplitDir::Horizontal,
+                            forward,
+                        ) {
+                            app.active_pane = target;
+                            app.needs_redraw = true;
+                            let _ = writer
+                                .send(ClientMessage::FocusPane {
+                                    tab_id,
+                                    pane_id: target,
+                                })
+                                .await;
+                        }
                         return;
                     }
 
