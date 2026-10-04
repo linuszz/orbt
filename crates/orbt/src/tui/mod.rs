@@ -459,6 +459,7 @@ fn render_help_overlay(frame: &mut Frame, area: Rect) {
         ("  ← →", "focus pane left / right"),
         ("  ⇧↑ ⇧↓", "focus pane above / below"),
         ("  o", "strip overview (click a pane to focus)"),
+        ("  mouse", "click ◀ ▶ to scroll, ▦ for overview, + to add"),
         ("  z", "zoom pane (toggle fullscreen)"),
         ("  [", "enter copy/scroll mode"),
         ("  c", "new window (tab)"),
@@ -630,7 +631,7 @@ pub fn strip_areas_at(
     out
 }
 
-pub fn compute_leaf_areas(node: &PaneLayout, area: Rect, focus: PaneId) -> Vec<(PaneId, Rect)> {
+pub fn compute_leaf_areas(node: &PaneLayout, area: Rect, scroll: usize) -> Vec<(PaneId, Rect)> {
     match node {
         PaneLayout::Leaf(pid) => vec![(*pid, area)],
         PaneLayout::Split {
@@ -640,20 +641,18 @@ pub fn compute_leaf_areas(node: &PaneLayout, area: Rect, focus: PaneId) -> Vec<(
             ratio,
         } => {
             let (first_area, second_area) = split_area(area, direction, *ratio);
-            let mut v = compute_leaf_areas(first, first_area, focus);
-            v.extend(compute_leaf_areas(second, second_area, focus));
+            // A split tree has no band to scroll, so its subtrees pass zero.
+            let mut v = compute_leaf_areas(first, first_area, 0);
+            v.extend(compute_leaf_areas(second, second_area, 0));
             v
         }
         PaneLayout::Strip {
             columns,
             column_width,
-        } => {
-            let scroll = strip_scroll_target(columns, *column_width, area, focus);
-            strip_areas_at(columns, *column_width, area, scroll)
-                .into_iter()
-                .map(|(pane, rect, _)| (pane, rect))
-                .collect()
-        }
+        } => strip_areas_at(columns, *column_width, area, scroll)
+            .into_iter()
+            .map(|(pane, rect, _)| (pane, rect))
+            .collect(),
     }
 }
 
@@ -716,6 +715,8 @@ pub struct StripNav {
     pub back: Rect,
     pub forward: Rect,
     pub add: Rect,
+    /// Opens the overview, next to the plus because both grow the session.
+    pub overview: Rect,
     pub track: Rect,
     /// The on-screen slice of the band, as a run of cells within `track`.
     pub window: Rect,
@@ -736,6 +737,41 @@ pub fn strip_nav_height(node: &PaneLayout) -> u16 {
     } else {
         0
     }
+}
+
+/// Keep `scroll` inside the band and make sure `focus` is on screen.
+///
+/// A focus change drags the viewport only as far as it must: if the focused
+/// column is already visible the band stays where the user left it, so looking at
+/// a pane does not move the world, and moving the focus to a neighbour does not
+/// jerk the view when both were already showing.
+pub fn strip_scroll_resolve(
+    columns: &[StripColumn],
+    column_width: u16,
+    area_width: u16,
+    scroll: usize,
+    focus: PaneId,
+) -> usize {
+    let width = column_width.max(1) as usize;
+    let total = width * columns.len();
+    let viewport = area_width.max(1) as usize;
+    let max_scroll = total.saturating_sub(viewport);
+    let scroll = scroll.min(max_scroll);
+    let Some(focus_col) = columns.iter().position(|c| c.panes.contains(&focus)) else {
+        return scroll;
+    };
+    let first = scroll / width;
+    let last = (scroll + viewport).saturating_sub(1) / width;
+    if focus_col >= first && focus_col <= last {
+        return scroll;
+    }
+    (focus_col * width).min(max_scroll)
+}
+
+/// The furthest the band can be scrolled.
+pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
+    let total = (column_width.max(1) as usize) * columns.len();
+    total.saturating_sub(area_width.max(1) as usize)
 }
 
 pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usize) -> StripNav {
@@ -759,8 +795,14 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
         width: 1,
         height: 1,
     };
-    let forward = Rect {
+    let overview = Rect {
         x: add.x.saturating_sub(2),
+        y: bar.y,
+        width: 1,
+        height: 1,
+    };
+    let forward = Rect {
+        x: overview.x.saturating_sub(2),
         y: bar.y,
         width: 1,
         height: 1,
@@ -801,6 +843,7 @@ pub fn strip_nav(area: Rect, column_width: u16, column_count: usize, scroll: usi
         back,
         forward,
         add,
+        overview,
         track,
         window,
         can_back: scroll > 0,
@@ -947,7 +990,13 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             column_width,
         } => {
             let effective = strip_solo_width(columns, *column_width, area);
-            let scroll = strip_scroll_target(columns, effective, area, app.active_pane);
+            let scroll = strip_scroll_resolve(
+                columns,
+                effective,
+                area.width,
+                app.strip_scroll,
+                app.active_pane,
+            );
             let areas = strip_areas_at(columns, effective, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
@@ -1857,7 +1906,7 @@ mod tests {
     }
 
     #[test]
-    fn hit_testing_follows_the_focus_that_the_renderer_used() {
+    fn hit_testing_follows_the_scroll_that_the_renderer_used() {
         let node = PaneLayout::Strip {
             columns: vec![
                 StripColumn::single(PaneId(1)),
@@ -1873,19 +1922,19 @@ mod tests {
             height: 10,
         };
 
-        let on_first = compute_leaf_areas(&node, area, PaneId(1));
-        let on_last = compute_leaf_areas(&node, area, PaneId(3));
-        assert_eq!(rect_of(&on_first, PaneId(1)).x, 0, "focus parks left");
+        let at_start = compute_leaf_areas(&node, area, 0);
+        let scrolled = compute_leaf_areas(&node, area, 80);
+        assert_eq!(rect_of(&at_start, PaneId(2)).x, 80, "unscrolled");
         assert_eq!(
-            rect_of(&on_first, PaneId(2)).x,
-            80,
-            "the middle column starts where it does in the band"
+            rect_of(&scrolled, PaneId(2)).x,
+            0,
+            "the same pane sits elsewhere once the band is scrolled; a click landing \
+             on it has to resolve to the pane the user aimed at"
         );
         assert_eq!(
-            rect_of(&on_last, PaneId(2)).x,
-            0,
-            "after scrolling, the same pane sits elsewhere; a click landing on it \
-             has to resolve to the same pane the user aimed at"
+            rect_of(&scrolled, PaneId(3)).x,
+            80,
+            "and the focus being elsewhere does not move the band on its own"
         );
         assert_eq!(
             pane_terminal_sizes(&node, area),
@@ -1906,7 +1955,14 @@ mod tests {
         assert_eq!(nav.bar.y, 21, "one row below the panes, not beside them");
         assert_eq!(nav.back.x, area.x);
         assert_eq!(nav.add.x, area.x + area.width - 1);
-        for spot in [nav.back, nav.forward, nav.add, nav.track, nav.window] {
+        for spot in [
+            nav.back,
+            nav.forward,
+            nav.add,
+            nav.overview,
+            nav.track,
+            nav.window,
+        ] {
             assert!(
                 spot.y >= area.y + area.height,
                 "controls live in their own row, so no pane loses a column to them"
@@ -1919,9 +1975,14 @@ mod tests {
             "a blank separates the arrow from the rail, or they read as one mark"
         );
         assert_eq!(
-            nav.forward.x,
+            nav.overview.x,
             nav.add.x - 2,
-            "and the plus keeps its own gap, so neither looks like the other"
+            "the overview sits next to the plus, both of which grow the session"
+        );
+        assert_eq!(
+            nav.forward.x,
+            nav.overview.x - 2,
+            "and the forward arrow keeps its own gap"
         );
     }
 
@@ -2071,6 +2132,44 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_looks_along_the_band_without_taking_the_focus() {
+        let columns = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ];
+        // A 100 wide viewport over 80 wide columns holds one and a bit.
+        let max = strip_scroll_max(&columns, 80, 100);
+        assert_eq!(max, 140, "two whole columns of travel");
+
+        // Focusing a column already on screen leaves the band alone, which is what
+        // stops the arrows and the focus from being the same action.
+        let after_focus = strip_scroll_resolve(&columns, 80, 100, 80, PaneId(2));
+        assert_eq!(after_focus, 80, "pane two is visible, so nothing moves");
+
+        // Column three starts at 160 and the viewport reaches 180, so it is already
+        // partly showing and the band stays put.
+        assert_eq!(strip_scroll_resolve(&columns, 80, 100, 80, PaneId(3)), 80);
+        assert_eq!(strip_scroll_resolve(&columns, 80, 100, 0, PaneId(1)), 0);
+
+        // Only a pane with no part of it on screen drags the viewport.
+        let narrow = [PaneId(1), PaneId(2), PaneId(3)];
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, 40, 0, PaneId(3)),
+            160,
+            "with a 40 wide viewport the third column cannot be seen at all"
+        );
+        assert_eq!(narrow.len(), 3);
+
+        // Looking past the end without focusing anything is allowed to sit there.
+        assert_eq!(
+            strip_scroll_resolve(&columns, 80, 100, max, PaneId(1)),
+            0,
+            "the focus was scrolled off screen, so the band goes to it"
+        );
+    }
+
+    #[test]
     fn a_lone_pane_fills_the_band_and_a_pair_keeps_the_configured_width() {
         let area = Rect {
             x: 0,
@@ -2145,7 +2244,7 @@ mod tests {
             ratio: 0.5,
         };
         let area = Rect::new(0, 0, 20, 10);
-        let areas = compute_leaf_areas(&layout, area, PaneId(1));
+        let areas = compute_leaf_areas(&layout, area, 0);
         assert_eq!(areas.len(), 2);
         assert_eq!(areas[0].0, PaneId(1));
         assert_eq!(areas[0].1.width, 10);

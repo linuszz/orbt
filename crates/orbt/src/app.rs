@@ -695,6 +695,16 @@ pub struct App {
     pub show_help: bool,
     /// Strip overview (prefix+o): every pane as a card, click to focus.
     pub show_overview: bool,
+    /// How far the strip has been scrolled, in band columns.
+    ///
+    /// This cannot be derived from the focus. Parking the focused column against
+    /// the left edge — which is what keeps a column boundary on the viewport edge
+    /// — means the viewport only ever moves when the focus does, so an arrow that
+    /// means "scroll" and a key that means "focus" would be the same action.
+    /// Holding the offset separately lets the band be looked at without moving
+    /// the focus, and the focus still pulls it along when it would otherwise
+    /// leave the viewport.
+    pub strip_scroll: usize,
     pub context_menu: Option<ContextMenu>,
     pub space_name: String,
     pub space_path: String,
@@ -891,6 +901,7 @@ impl App {
             agent_panel_mode: AgentPanelMode::Hidden,
             show_help: false,
             show_overview: false,
+            strip_scroll: 0,
             context_menu: None,
             space_name: spaces
                 .get(active_space_idx)
@@ -1121,6 +1132,35 @@ impl App {
             Some(pid) => std::borrow::Cow::Owned(PaneLayout::Leaf(pid)),
             None => std::borrow::Cow::Borrowed(self.pane_tree()),
         }
+    }
+
+    /// Drag the strip along only far enough to bring the focused pane on screen.
+    ///
+    /// The band stays where the user put it while the new pane is already visible,
+    /// so walking along a row of panes does not scroll the world out from under
+    /// them.
+    pub fn pull_strip_into_view(&mut self, viewport_width: u16) {
+        if self.zoomed_pane.is_some() {
+            return;
+        }
+        if !self.pane_tree().is_strip() {
+            self.strip_scroll = 0;
+            return;
+        }
+        if let PaneLayout::Strip {
+            columns,
+            column_width,
+        } = self.pane_tree()
+        {
+            self.strip_scroll = crate::tui::strip_scroll_resolve(
+                columns,
+                *column_width,
+                viewport_width,
+                self.strip_scroll,
+                self.active_pane,
+            );
+        }
+        self.needs_redraw = true;
     }
 
     pub fn toggle_zoom(&mut self) {
