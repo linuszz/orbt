@@ -2781,10 +2781,18 @@ async fn handle_mouse(
                     // the focus: scrolling is looking along the band, and tying the
                     // two together meant an arrow either did nothing or dragged the
                     // selection out from under the user.
+                    //
+                    // The step is most of a viewport rather than one column, because
+                    // stepping by a column is often smaller than the slack left at
+                    // the end of the band: three columns in a viewport two and a bit
+                    // wide leave sixteen columns of travel, so a column-sized step
+                    // moved the band less than the width of the pane already on
+                    // screen and read as nothing happening.
+                    let step = orbt_tui::tui::strip_scroll_step(band.width);
                     let target_scroll: Option<usize> = if on(nav.back) && nav.can_back {
-                        Some(scroll.saturating_sub(effective as usize))
+                        Some(scroll.saturating_sub(step))
                     } else if on(nav.forward) && nav.can_forward {
-                        Some((scroll + effective as usize).min(max_scroll))
+                        Some((scroll + step).min(max_scroll))
                     } else {
                         None
                     };

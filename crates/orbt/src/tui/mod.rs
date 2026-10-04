@@ -769,6 +769,12 @@ pub fn strip_scroll_resolve(
 }
 
 /// The furthest the band can be scrolled.
+/// How far one press of an arrow moves the band. Half a viewport, so every
+/// press visibly changes the view even when little of the band is left.
+pub fn strip_scroll_step(viewport_width: u16) -> usize {
+    (viewport_width / 2).max(1) as usize
+}
+
 pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
     let total = (column_width.max(1) as usize) * columns.len();
     total.saturating_sub(area_width.max(1) as usize)
@@ -881,6 +887,9 @@ fn render_strip_nav(
         Paragraph::new("+").style(Style::default().fg(accent()).add_modifier(Modifier::BOLD)),
         nav.add,
     );
+    // \u{25a6} is missing from most terminal fonts and comes out as a blank cell,
+    // so the overview is drawn with a glyph the project already relies on.
+    frame.render_widget(Paragraph::new("\u{25c7}").style(arrow(true)), nav.overview);
 
     // End caps stop the rail reading as one long rule across the bottom.
     let rail = format!(
@@ -2167,6 +2176,30 @@ mod tests {
             0,
             "the focus was scrolled off screen, so the band goes to it"
         );
+    }
+
+    #[test]
+    fn an_arrow_press_always_moves_the_band_further_than_the_slack_at_the_end() {
+        // Three 80 wide columns in a 176 wide viewport, which is what a 200 column
+        // terminal with the sidebar open gives.
+        let columns = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ];
+        let viewport = 176u16;
+        let max_scroll = strip_scroll_max(&columns, 80, viewport);
+        assert_eq!(max_scroll, 64, "only 64 columns of travel left");
+
+        let step = strip_scroll_step(viewport);
+        assert_eq!(step, 88, "half a viewport");
+        let moved = step.min(max_scroll);
+        assert_eq!(
+            moved, 64,
+            "so the press travels the whole remainder rather than a fraction of a \
+             column that would look like nothing happened"
+        );
+        assert!(max_scroll < step, "the whole remainder is one press");
     }
 
     #[test]
