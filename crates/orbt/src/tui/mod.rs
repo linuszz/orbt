@@ -760,23 +760,21 @@ pub fn strip_scroll_resolve(
     let Some(focus_col) = columns.iter().position(|c| c.panes.contains(&focus)) else {
         return scroll;
     };
-
-    // Ask where the pane actually lands rather than which whole columns the
-    // viewport covers. Dividing by the column width counts a pane showing a
-    // sliver as fully visible, so crossing from a stacked column to the next one
-    // could leave the band where it was and then shift it by a column the moment
-    // the numbers rounded the other way — a one cell jog that had no cause the
-    // user could point at.
     let pane_left = focus_col * width;
     let pane_right = pane_left + width;
-    let view_left = scroll;
     let view_right = scroll + viewport;
-    if pane_left >= view_left && pane_right <= view_right {
+    if pane_left >= scroll && pane_right <= view_right {
         return scroll;
     }
-    // Bring the pane fully into view, preferring the side it was already on.
-    if pane_left < view_left {
-        pane_left
+
+    // Shift by the least that brings the pane fully into view, rather than by a
+    // whole column. A viewport only a couple of columns wide means a column sized
+    // step throws most of what was on screen away, so cycling between a stacked
+    // column and the one beside it appeared to jump rather than move.
+    if pane_left < scroll {
+        // Only reachable when a pane is narrower than the viewport and the band is
+        // already at its end, so clamp rather than run off the front.
+        pane_left.min(max_scroll)
     } else {
         (pane_right - viewport).min(max_scroll)
     }
@@ -1191,7 +1189,9 @@ fn render_cells(
         let mut col = start;
         while col < cols {
             let cell = &grid.cells[row * grid.cols as usize + col];
-            let x = area.x + col as u16;
+            // `col` indexes the grid and starts at the first column that is not
+            // scrolled off, so its position in the area is relative to that.
+            let x = area.x + (col - start) as u16;
             let y = area.y + row as u16;
 
             // Skip spacer cells (placed after wide chars by VT parser)
@@ -1279,7 +1279,9 @@ fn render_cells(
     }
 
     if show_cursor && grid.cursor_visible {
-        let cx = area.x + grid.cursor_x.min(cols as u16);
+        // Same as the cells: the cursor is a grid column, and only the part from
+        // `start` onwards is on screen.
+        let cx = area.x + grid.cursor_x.saturating_sub(start as u16);
         let cy = area.y + grid.cursor_y.min(rows as u16);
         frame.set_cursor_position((cx, cy));
     }
@@ -2510,6 +2512,150 @@ mod tests {
             let r = areas.iter().find(|(p, _, _)| *p == focus).unwrap().1;
             assert_eq!(r.width, W, "pane {focus:?} is never clipped horizontally");
             assert!(r.x >= area.x && r.x + r.width <= area.x + area.width);
+        }
+    }
+}
+
+#[cfg(test)]
+mod border_safety {
+    use super::*;
+    use crate::app::App;
+    use orbt_protocol::{
+        CellGrid, FullState, PaneInfo, PaneLayout, SpaceId, SpaceInfo, TabId, TabInfo,
+    };
+    use ratatui::{backend::TestBackend, Terminal};
+
+    fn state(n: u16) -> FullState {
+        let ids: Vec<PaneId> = (1..=n as u32).map(PaneId).collect();
+        FullState {
+            spaces: vec![SpaceInfo {
+                id: SpaceId(1),
+                name: "d".into(),
+                path: "/p".into(),
+                tabs: vec![TabInfo {
+                    id: TabId(1),
+                    name: "m".into(),
+                    layout: PaneLayout::Strip {
+                        columns: ids
+                            .iter()
+                            .map(|id| orbt_protocol::StripColumn::single(*id))
+                            .collect(),
+                        column_width: 80,
+                    },
+                    active_pane: *ids.last().unwrap(),
+                }],
+                active_tab: TabId(1),
+                panes: ids
+                    .iter()
+                    .map(|id| PaneInfo {
+                        id: *id,
+                        tab_id: TabId(1),
+                        title: String::new(),
+                        cwd: "/p".into(),
+                        cell_grid: filled_protocol_grid(),
+                    })
+                    .collect(),
+            }],
+            active_space: SpaceId(1),
+            agents: vec![],
+        }
+    }
+
+    fn filled_protocol_grid() -> CellGrid {
+        let core = filled_grid();
+        CellGrid {
+            cols: core.cols,
+            rows: core.rows,
+            cells: core.cells,
+            cursor_x: core.cursor_x,
+            cursor_y: core.cursor_y,
+            cursor_visible: core.cursor_visible,
+            mouse_reporting: core.mouse_reporting,
+            mouse_sgr: core.mouse_sgr,
+        }
+    }
+
+    /// Every cell a letter, so a write outside the pane cannot go unnoticed.
+    fn filled_grid() -> orbt_core::CellGrid {
+        let mut g = orbt_core::CellGrid::new(78, 9);
+        for y in 0..9u16 {
+            for x in 0..78u16 {
+                g.cells[y as usize * 78 + x as usize].ch = 'X';
+            }
+        }
+        g
+    }
+
+    fn render_at(scroll: usize, focus: PaneId, n: u16) -> ratatui::buffer::Buffer {
+        let mut app = App::from_welcome(&state(n), 178, 24);
+        // from_welcome copies the server grid in; overwrite it afterwards so the
+        // cells are definitely filled.
+        for pane in app.panes.values_mut() {
+            let mut ps = crate::app::PaneState::new(78, 9);
+            ps.parser.grid = filled_grid();
+            *pane = ps;
+        }
+        app.strip_scroll = scroll;
+        app.active_pane = focus;
+        let backend = TestBackend::new(178, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        terminal.backend().buffer().clone()
+    }
+
+    /// Borders are drawn before the cells, so a cell computed at its grid offset
+    /// instead of its offset inside the pane lands on a border and erases it. That
+    /// is what made a clipped pane look like it had lost a column and the pane
+    /// beside it slide over.
+    #[test]
+    fn a_clipped_pane_never_writes_outside_its_own_box() {
+        // Mark every cell a pane may legally draw in, then assert no cell turned up
+        // anywhere else. Cells are written after the borders, so a pane whose grid
+        // index was used as an offset inside its box lands on the frame: the pane
+        // looks one column narrower and the text sits past its right edge.
+        for scroll in [0usize, 20, 40, 60, 80, 100, 120, 144] {
+            for focus in [PaneId(1), PaneId(2), PaneId(4)] {
+                let buf = render_at(scroll, focus, 4);
+                let app = App::from_welcome(&state(4), 178, 24);
+                let PaneLayout::Strip {
+                    columns,
+                    column_width,
+                } = app.layout().into_owned()
+                else {
+                    unreachable!()
+                };
+                let area = Rect {
+                    x: 24,
+                    y: 1,
+                    width: 154,
+                    height: 20,
+                };
+                let settled =
+                    strip_scroll_resolve(&columns, column_width, area.width, scroll, focus);
+                let mut allowed = vec![vec![false; 178]; 24];
+                for (_, rect, _) in strip_areas_at(&columns, column_width, area, settled) {
+                    if rect.width < 3 {
+                        continue;
+                    }
+                    for y in rect.y + 1..rect.y + rect.height - 1 {
+                        for x in rect.x + 1..rect.x + rect.width - 1 {
+                            if (y as usize) < 24 && (x as usize) < 178 {
+                                allowed[y as usize][x as usize] = true;
+                            }
+                        }
+                    }
+                }
+                for (y, row) in allowed.iter().enumerate() {
+                    for (x, ok) in row.iter().enumerate() {
+                        if !ok && buf[(x as u16, y as u16)].symbol() == "X" {
+                            panic!(
+                                "scroll {scroll} focus {focus:?}: a cell landed at {x},{y}, \
+                                 outside every pane"
+                            );
+                        }
+                    }
+                }
+            }
         }
     }
 }
