@@ -2779,7 +2779,9 @@ async fn handle_mouse(
                         focus,
                     );
                     let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
-                    let on = |r: ratatui::layout::Rect| mouse.column == r.x && mouse.row == r.y;
+                    let on = |r: ratatui::layout::Rect| {
+                        mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row == r.y
+                    };
                     let max_scroll =
                         orbt_tui::tui::strip_scroll_max(columns, effective, band.width);
                     let tab_id = app.active_tab_id;
@@ -2787,9 +2789,9 @@ async fn handle_mouse(
                     // The arrows cycle, the same as the palette's left and right and
                     // the f key, so every control that changes pane agrees on what
                     // "next" is and wraps at the ends.
-                    let step = if on(nav.back) && nav.can_back {
+                    let step = if on(nav.back_hit) && nav.can_back {
                         Some(true)
-                    } else if on(nav.forward) && nav.can_forward {
+                    } else if on(nav.forward_hit) && nav.can_forward {
                         Some(false)
                     } else {
                         None
@@ -2811,13 +2813,13 @@ async fn handle_mouse(
                         return;
                     }
 
-                    if on(nav.overview) {
+                    if on(nav.overview_hit) {
                         app.show_overview = true;
                         app.needs_redraw = true;
                         return;
                     }
 
-                    if on(nav.add) {
+                    if on(nav.add_hit) {
                         let _ = writer
                             .send(ClientMessage::SplitPane {
                                 tab_id,

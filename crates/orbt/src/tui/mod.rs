@@ -712,9 +712,16 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
 /// panes nothing.
 pub struct StripNav {
     pub bar: Rect,
+    /// One cell per glyph, centred in its hit area.
     pub back: Rect,
     pub forward: Rect,
     pub add: Rect,
+    /// Wider than the glyphs: a single cell is a poor target for a mouse, so each
+    /// control claims three and the drawing stays where it was.
+    pub back_hit: Rect,
+    pub forward_hit: Rect,
+    pub overview_hit: Rect,
+    pub add_hit: Rect,
     /// Opens the overview, next to the plus because both grow the session.
     pub overview: Rect,
     pub track: Rect,
@@ -800,36 +807,59 @@ pub fn strip_nav(
     };
     // Controls sit in their own cells with a blank between them, so an arrow
     // never reads as part of the rail next to it.
-    let back = Rect {
-        x: bar.x,
+    // Inset by one so the leftmost control is not glued to the sidebar, and give
+    // each control three cells with a single blank between, which puts the same
+    // space on both sides of the rail.
+    let btn = 3u16;
+    let gap = 1u16;
+    let slot = btn + gap;
+    let back_hit = Rect {
+        x: bar.x + 1,
         y: bar.y,
-        width: 1,
+        width: btn,
         height: 1,
     };
-    let add = Rect {
-        x: bar.x + bar.width.saturating_sub(1),
+    // Lay the right hand controls out from the right edge so the rail takes
+    // whatever is left, rather than computing the rail first and finding it does
+    // not fit between the arrows.
+    let add_hit = Rect {
+        x: bar.x + bar.width.saturating_sub(btn + 1),
         y: bar.y,
-        width: 1,
+        width: btn,
         height: 1,
     };
-    let overview = Rect {
-        x: add.x.saturating_sub(2),
+    let overview_hit = Rect {
+        x: add_hit.x.saturating_sub(slot),
         y: bar.y,
-        width: 1,
+        width: btn,
         height: 1,
     };
-    let forward = Rect {
-        x: overview.x.saturating_sub(2),
+    let forward_hit = Rect {
+        x: overview_hit.x.saturating_sub(slot),
         y: bar.y,
-        width: 1,
+        width: btn,
         height: 1,
     };
+    let track_x = back_hit.x + btn + gap;
+    // One blank separates the rail from the control it belongs to, measured from
+    // the hit area's edge since the glyph sits in the middle of it.
+    let track_end = forward_hit.x.saturating_sub(gap);
     let track = Rect {
-        x: back.x + 2,
+        x: track_x,
         y: bar.y,
-        width: forward.x.saturating_sub(3).saturating_sub(back.x + 2),
+        width: track_end.saturating_sub(track_x),
         height: 1,
     };
+    let centre = |hit: Rect| Rect {
+        x: hit.x + 1,
+        y: hit.y,
+        width: 1,
+        height: 1,
+    };
+    let back = centre(back_hit);
+    let forward = centre(forward_hit);
+    let add = centre(add_hit);
+    let overview = centre(overview_hit);
 
     let width = column_width.max(1) as usize;
     let total = width * columns.len().max(1);
@@ -866,6 +896,10 @@ pub fn strip_nav(
         back,
         forward,
         add,
+        back_hit,
+        forward_hit,
+        overview_hit,
+        add_hit,
         overview,
         track,
         window,
@@ -882,7 +916,9 @@ fn render_strip_nav(
     scroll: usize,
 ) {
     let nav = strip_nav(area, column_width, columns, scroll);
-    if nav.bar.width < 8 || nav.track.width == 0 {
+    // Four controls of three cells, three blanks between them, and a rail worth
+    // looking at: below that the bar would be all buttons and no position.
+    if nav.bar.width < 24 || nav.track.width < 4 {
         return;
     }
     let arrow = |live: bool| {
@@ -1991,13 +2027,11 @@ mod tests {
         };
         let nav = strip_nav(area, 80, &cols3(), 0);
         assert_eq!(nav.bar.y, 21, "one row below the panes, not beside them");
-        assert_eq!(nav.back.x, area.x);
-        assert_eq!(nav.add.x, area.x + area.width - 1);
         for spot in [
-            nav.back,
-            nav.forward,
-            nav.add,
-            nav.overview,
+            nav.back_hit,
+            nav.forward_hit,
+            nav.add_hit,
+            nav.overview_hit,
             nav.track,
             nav.window,
         ] {
@@ -2007,19 +2041,16 @@ mod tests {
             );
             assert!(spot.x >= area.x && spot.x + spot.width <= area.x + area.width);
         }
-        assert_eq!(
-            nav.track.x,
-            nav.back.x + 2,
+        assert!(
+            nav.track.x > nav.back_hit.x + nav.back_hit.width,
             "a blank separates the arrow from the rail, or they read as one mark"
         );
-        assert_eq!(
-            nav.overview.x,
-            nav.add.x - 2,
-            "the overview sits next to the plus, both of which grow the session"
+        assert!(
+            nav.overview_hit.x + nav.overview_hit.width < nav.add_hit.x,
+            "the overview sits beside the plus, both of which grow the session"
         );
-        assert_eq!(
-            nav.forward.x,
-            nav.overview.x - 2,
+        assert!(
+            nav.forward_hit.x + nav.forward_hit.width <= nav.overview_hit.x,
             "and the forward arrow keeps its own gap"
         );
     }
@@ -2168,9 +2199,8 @@ mod tests {
         let nav = strip_nav(area, 80, &[StripColumn::single(PaneId(1))], 0);
         assert_eq!(nav.window.width, nav.track.width);
         assert!(!nav.can_back && !nav.can_forward, "nothing to move");
-        assert_eq!(
-            nav.add.x,
-            area.x + area.width - 1,
+        assert!(
+            nav.add_hit.x + nav.add_hit.width <= area.x + area.width,
             "the add button is always reachable, even with one pane"
         );
     }
@@ -2314,6 +2344,65 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_bar_is_inset_symmetric_and_its_controls_are_wide_enough_to_click() {
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 176,
+            height: 20,
+        };
+        let cols = cols3();
+        let nav = strip_nav(area, 80, &cols, 0);
+
+        // Inset from the content edge, so the first control is not glued to the
+        // sidebar and reads as part of it.
+        assert!(
+            nav.back.x > area.x,
+            "the bar leaves a cell between itself and the sidebar"
+        );
+        assert!(
+            nav.add.x + 1 < area.x + area.width,
+            "and the same on the far side"
+        );
+
+        // The same breathing room on both sides of the rail, measured between the
+        // hit areas since those are what the eye reads as the control's extent.
+        let left_gap = nav.track.x - (nav.back_hit.x + nav.back_hit.width);
+        let right_gap = nav.forward_hit.x - (nav.track.x + nav.track.width);
+        assert_eq!(
+            left_gap, right_gap,
+            "the rail sits centred between the arrows: {left_gap} left, {right_gap} right"
+        );
+
+        // A single cell is a poor mouse target, so each control claims three.
+        for (name, hit) in [
+            ("back", nav.back_hit),
+            ("forward", nav.forward_hit),
+            ("overview", nav.overview_hit),
+            ("add", nav.add_hit),
+        ] {
+            assert!(hit.width >= 3, "{name} is only {} wide", hit.width);
+            assert_eq!(hit.height, 1, "{name} is the height of the bar");
+        }
+
+        // Hit areas must not overlap, or the leftmost one wins for both arrows.
+        let mut hits = [nav.back_hit, nav.forward_hit, nav.overview_hit, nav.add_hit];
+        hits.sort_by_key(|r| r.x);
+        for pair in hits.windows(2) {
+            assert!(
+                pair[0].x + pair[0].width <= pair[1].x,
+                "hit areas overlap: {:?} and {:?}",
+                pair[0],
+                pair[1]
+            );
+        }
+
+        // The glyph sits in the middle of the area that catches the click.
+        assert_eq!(nav.back.x, nav.back_hit.x + 1);
+        assert_eq!(nav.add.x, nav.add_hit.x + 1);
     }
 
     #[test]
