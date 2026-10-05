@@ -691,6 +691,27 @@ pub fn strip_areas_at(
     out
 }
 
+/// The scroll both rendering and hit-testing must use: the state's glide
+/// position, pulled far enough that the focused pane is visible. Render was
+/// doing this resolve while clicks were not, which is how a click could focus
+/// whatever the un-scrolled geometry had under the pointer.
+pub fn resolved_strip_scroll(node: &PaneLayout, area: Rect, scroll: usize, focus: PaneId) -> usize {
+    let PaneLayout::Strip {
+        columns,
+        column_width,
+    } = node
+    else {
+        return scroll;
+    };
+    strip_scroll_resolve(
+        columns,
+        resolve_column_width(columns, *column_width, area.width),
+        area.width,
+        scroll,
+        focus,
+    )
+}
+
 pub fn compute_leaf_areas(node: &PaneLayout, area: Rect, scroll: usize) -> Vec<(PaneId, Rect)> {
     match node {
         PaneLayout::Leaf(pid) => vec![(*pid, area)],
@@ -1113,13 +1134,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             column_width,
         } => {
             let effective = strip_solo_width(columns, *column_width, area);
-            let scroll = strip_scroll_resolve(
-                columns,
-                effective,
-                area.width,
-                app.visual_scroll(),
-                app.active_pane,
-            );
+            let scroll = resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane);
             let areas = strip_areas_at(columns, effective, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
@@ -1840,6 +1855,44 @@ mod tests {
             "\u{2212}",
             "zoomed means the zoom button offers restore"
         );
+    }
+
+    #[test]
+    fn resolved_scroll_puts_the_focused_pane_inside_the_hit_rects() {
+        // Regression: cycling to a column off the right edge left state scroll
+        // at 0; rendering pulled the view over but clicks tested the un-scrolled
+        // geometry and focused whatever column the pointer was over at scroll 0.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+        let tree = PaneLayout::Strip {
+            columns: (1..=4u32).map(|i| StripColumn::single(PaneId(i))).collect(),
+            column_width: 0,
+        };
+
+        // State scroll 0 (as left by a focus cycle), focus on column 4.
+        let scroll = resolved_strip_scroll(&tree, area, 0, PaneId(4));
+        let leaves = compute_leaf_areas(&tree, area, scroll);
+        let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(4)).unwrap();
+        assert!(
+            rect.x >= area.x && rect.x + rect.width <= area.x + area.width,
+            "column 4 is fully on screen at the resolved scroll, got {rect:?}"
+        );
+        // And what is under the pointer where column 4 shows is column 4.
+        let hit = leaves
+            .iter()
+            .find(|(_, r)| {
+                let cx = area.x + area.width - 1;
+                cx >= r.x && cx < r.x + r.width
+            })
+            .map(|(p, _)| *p);
+        assert_eq!(hit, Some(PaneId(4)));
+
+        // Focus on column 1 resolves back to the start.
+        assert_eq!(resolved_strip_scroll(&tree, area, 0, PaneId(1)), 0);
     }
 
     #[test]

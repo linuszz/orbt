@@ -1137,6 +1137,14 @@ async fn handle_key(
                             pane_id: target_pane,
                         })
                         .await;
+                    let band = content_area(term_size, app);
+                    let target_scroll = orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        band,
+                        app.visual_scroll(),
+                        app.active_pane,
+                    );
+                    app.set_strip_scroll(target_scroll);
                     app.needs_redraw = true;
                     return;
                 }
@@ -2059,7 +2067,12 @@ async fn handle_mobile_mouse(
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
                             pane_area,
-                            app.visual_scroll(),
+                            orbt_tui::tui::resolved_strip_scroll(
+                                &app.layout(),
+                                pane_area,
+                                app.visual_scroll(),
+                                app.active_pane,
+                            ),
                         );
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
@@ -2833,6 +2846,13 @@ async fn handle_mouse(
                             orbt_tui::app::App::cycle_pane_from(app.pane_tree(), current, backwards)
                         {
                             app.active_pane = target;
+                            let target_scroll = orbt_tui::tui::resolved_strip_scroll(
+                                &app.layout(),
+                                band,
+                                app.visual_scroll(),
+                                app.active_pane,
+                            );
+                            app.set_strip_scroll(target_scroll);
                             app.needs_redraw = true;
                             let _ = writer
                                 .send(ClientMessage::FocusPane {
@@ -3182,8 +3202,16 @@ async fn handle_mouse(
             }
 
             let pane_area = content_area(term_size, app);
-            let areas =
-                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll());
+            let areas = orbt_tui::tui::compute_leaf_areas(
+                &app.layout(),
+                pane_area,
+                orbt_tui::tui::resolved_strip_scroll(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                    app.active_pane,
+                ),
+            );
             // Window controls on the border row win over anything inside the
             // pane, the same rule tuios gives its title-bar buttons.
             let mut button_hit = false;
@@ -3357,7 +3385,12 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    app.visual_scroll(),
+                    orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        app.active_pane,
+                    ),
                 );
                 let mut found_pane = None;
                 for (pid, rect) in &areas {
@@ -3461,7 +3494,12 @@ async fn handle_mouse(
                     let areas = orbt_tui::tui::compute_leaf_areas(
                         &app.layout(),
                         pane_area,
-                        app.visual_scroll(),
+                        orbt_tui::tui::resolved_strip_scroll(
+                            &app.layout(),
+                            pane_area,
+                            app.visual_scroll(),
+                            app.active_pane,
+                        ),
                     );
                     for (pid, rect) in &areas {
                         if *pid == app.active_pane
@@ -3496,7 +3534,12 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    app.visual_scroll(),
+                    orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        app.active_pane,
+                    ),
                 );
                 for (pid, rect) in &areas {
                     if *pid == sel_pane_id {
@@ -3528,7 +3571,12 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    app.visual_scroll(),
+                    orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        app.active_pane,
+                    ),
                 );
                 for (pid, rect) in &areas {
                     if *pid == app.active_pane
@@ -3668,18 +3716,26 @@ async fn handle_mouse(
             // Window controls light up as a group when the pointer crosses any
             // of them, the macOS traffic-light behaviour tuios copies.
             let pane_area = content_area(term_size, app);
-            let hovered =
-                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll())
-                    .iter()
-                    .find(|(_, rect)| {
-                        if rect.width < 10 || mouse.row != rect.y {
-                            return false;
-                        }
-                        let [(.., a), (.., b)] = orbt_tui::tui::pane_button_rects(*rect);
-                        let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
-                        mouse.column >= lo.saturating_sub(1) && mouse.column <= hi + 1
-                    })
-                    .map(|(pid, _)| *pid);
+            let hovered = orbt_tui::tui::compute_leaf_areas(
+                &app.layout(),
+                pane_area,
+                orbt_tui::tui::resolved_strip_scroll(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                    app.active_pane,
+                ),
+            )
+            .iter()
+            .find(|(_, rect)| {
+                if rect.width < 10 || mouse.row != rect.y {
+                    return false;
+                }
+                let [(.., a), (.., b)] = orbt_tui::tui::pane_button_rects(*rect);
+                let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+                mouse.column >= lo.saturating_sub(1) && mouse.column <= hi + 1
+            })
+            .map(|(pid, _)| *pid);
             if app.hover_win_buttons != hovered {
                 app.hover_win_buttons = hovered;
                 app.needs_redraw = true;
