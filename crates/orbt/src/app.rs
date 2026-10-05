@@ -769,6 +769,9 @@ pub struct App {
     pub tab_hovered: Option<usize>,
     pub sidebar_hovered: Option<usize>,
     pub sidebar_toggle_hovered: bool,
+    /// Pane whose window-control group the pointer is over; the group shows
+    /// its glyphs while hovered and plain dots otherwise (tuios dots style).
+    pub hover_win_buttons: Option<PaneId>,
     pub selection: Option<Selection>,
     pub agents: Vec<AgentInfo>,
     pub agent_metrics: HashMap<AgentId, AgentMetrics>,
@@ -976,6 +979,7 @@ impl App {
             tab_hovered: None,
             sidebar_hovered: None,
             sidebar_toggle_hovered: false,
+            hover_win_buttons: None,
             selection: None,
             agents: state.agents.clone(),
             agent_metrics: HashMap::new(),

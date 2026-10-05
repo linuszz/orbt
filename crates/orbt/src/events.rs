@@ -3643,6 +3643,25 @@ async fn handle_mouse(
                 app.needs_redraw = true;
             }
 
+            // Window controls light up as a group when the pointer crosses any
+            // of them, the macOS traffic-light behaviour tuios copies.
+            let pane_area = content_area(term_size, app);
+            let hovered =
+                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll())
+                    .iter()
+                    .find(|(_, rect)| {
+                        if rect.width < 10 || mouse.row != rect.y {
+                            return false;
+                        }
+                        let [(.., close), (.., zoom)] = orbt_tui::tui::pane_button_rects(*rect);
+                        mouse.column >= close.x.saturating_sub(1) && mouse.column <= zoom.x + 1
+                    })
+                    .map(|(pid, _)| *pid);
+            if app.hover_win_buttons != hovered {
+                app.hover_win_buttons = hovered;
+                app.needs_redraw = true;
+            }
+
             // Tab bar hover (row 0 of the frame, after the sidebar).
             if mouse.row == 0 && mouse.column >= sb_w {
                 let col = mouse.column - sb_w;

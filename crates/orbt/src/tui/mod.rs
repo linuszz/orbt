@@ -1260,15 +1260,26 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
     frame.render_widget(block, area);
 
     // Window controls punched into the top border, macOS order: close, then
-    // zoom (restore while zoomed). Too narrow a pane has no room for them.
+    // zoom (restore while zoomed). Dots at rest, glyphs while the pointer is
+    // over the group (tuios dots style). Reset background so the pad matches
+    // the border row exactly. Too narrow a pane has no room for them.
     if area.width >= 10 {
         let zoomed = app.zoomed_pane == Some(pane_id);
-        let blank = Style::default().bg(bg_primary());
+        let hovered = app.hover_win_buttons == Some(pane_id);
         for (button, at) in pane_button_rects(area) {
-            let (glyph, color) = match button {
-                WinButton::Close => ("\u{00d7}", accent_error()),
-                WinButton::Zoom if zoomed => ("\u{2212}", accent_blocked()),
-                WinButton::Zoom => ("+", accent_idle()),
+            let color = match button {
+                WinButton::Close => accent_error(),
+                WinButton::Zoom if zoomed => accent_blocked(),
+                WinButton::Zoom => accent_idle(),
+            };
+            let glyph = if hovered {
+                match button {
+                    WinButton::Close => "\u{00d7}",
+                    WinButton::Zoom if zoomed => "\u{2212}",
+                    WinButton::Zoom => "+",
+                }
+            } else {
+                "\u{25cf}"
             };
             let pad = Rect {
                 x: at.x.saturating_sub(1),
@@ -1276,11 +1287,14 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
                 width: 3,
                 height: 1,
             };
-            frame.render_widget(Block::default().style(blank), pad);
+            frame.render_widget(
+                Block::default().style(Style::default().bg(Color::Reset)),
+                pad,
+            );
             frame.render_widget(
                 Paragraph::new(Span::styled(
                     glyph,
-                    Style::default().fg(color).bg(bg_primary()),
+                    Style::default().fg(color).bg(Color::Reset),
                 )),
                 at,
             );
@@ -1732,32 +1746,38 @@ mod tests {
             cwd: "/tmp".to_string(),
             cell_grid: CellGrid::new(80, 24),
         });
-        let app = App::from_welcome(&state, 120, 30);
+        let mut app = App::from_welcome(&state, 120, 30);
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 96,
+            height: 27,
+        };
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
+
+        // At rest every control is a coloured dot.
         terminal.draw(|f| render(f, &app)).unwrap();
         let buf = terminal.backend().buffer().clone();
-
-        // Every pane carries a close and a zoom button where the geometry says.
-        for (pid, rect) in compute_leaf_areas(
-            &app.layout(),
-            Rect {
-                x: 24,
-                y: 1,
-                width: 96,
-                height: 27,
-            },
-            0,
-        ) {
-            for (button, at) in pane_button_rects(rect) {
-                let glyph = buf[(at.x, at.y)].symbol();
-                match button {
-                    WinButton::Close => assert_eq!(glyph, "\u{00d7}", "close at {at:?}"),
-                    WinButton::Zoom => assert_eq!(glyph, "+", "zoom at {at:?}"),
-                }
-                let _ = pid;
+        for (_, rect) in compute_leaf_areas(&app.layout(), area, 0) {
+            for (_, at) in pane_button_rects(rect) {
+                assert_eq!(
+                    buf[(at.x, at.y)].symbol(),
+                    "\u{25cf}",
+                    "a control at rest is a dot at {at:?}"
+                );
             }
         }
+
+        // Hovering the group reveals the glyphs, on both buttons at once.
+        app.hover_win_buttons = Some(PaneId(1));
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let leaves = compute_leaf_areas(&app.layout(), area, 0);
+        let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
+        let [(.., close), (.., zoom)] = pane_button_rects(*rect);
+        assert_eq!(buf[(close.x, close.y)].symbol(), "\u{00d7}", "close glyph");
+        assert_eq!(buf[(zoom.x, zoom.y)].symbol(), "+", "zoom glyph");
     }
 
     #[test]
@@ -1779,6 +1799,7 @@ mod tests {
         let mut app = App::from_welcome(&state, 120, 30);
         app.toggle_zoom();
         assert_eq!(app.zoomed_pane, Some(PaneId(1)));
+        app.hover_win_buttons = Some(PaneId(1));
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
