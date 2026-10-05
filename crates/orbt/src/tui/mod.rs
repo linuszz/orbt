@@ -346,9 +346,12 @@ pub fn render(frame: &mut Frame, app: &App) {
     }
 
     if app.show_overview {
+        // The panel floats over the pane band, not the whole frame: centring it
+        // on the frame would shift it a sidebar's width left of where the mouse
+        // handler (which works in band coordinates) believes the cards are.
         widgets::pane_overview::render(
             frame,
-            overview_area(area, overview_tallest_column(app.pane_tree())),
+            overview_area(rows[1], overview_tallest_column(app.pane_tree())),
             app,
         );
     }
@@ -1855,6 +1858,48 @@ mod tests {
             "\u{2212}",
             "zoomed means the zoom button offers restore"
         );
+    }
+
+    #[test]
+    fn the_overview_panel_floats_over_the_band_not_the_sidebar() {
+        // Regression: the panel was centred on the full frame while the click
+        // handler laid cards out over the band, so every click missed its card
+        // by half a sidebar.
+        let mut state = minimal_state();
+        state.spaces[0].tabs[0].layout = PaneLayout::Strip {
+            columns: vec![
+                StripColumn::single(PaneId(1)),
+                StripColumn::single(PaneId(2)),
+            ],
+            column_width: 0,
+        };
+        state.spaces[0].panes.push(PaneInfo {
+            id: PaneId(2),
+            tab_id: TabId(1),
+            title: String::new(),
+            cwd: "/tmp".to_string(),
+            cell_grid: CellGrid::new(80, 24),
+        });
+        let mut app = App::from_welcome(&state, 120, 30);
+        app.show_overview = true;
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        // No overview chrome may land on the sidebar (x < 24): the rounded
+        // corner of the panel or of a card is the giveaway.
+        for y in 0..30u16 {
+            for x in 0..24u16 {
+                let sym = buf[(x, y)].symbol();
+                assert!(
+                    sym != "\u{256d}" && sym != "\u{256e}",
+                    "overview chrome leaked onto the sidebar at {x},{y}"
+                );
+            }
+        }
+        // And the panel title sits inside the band.
+        assert!(buffer_contains(&terminal, "Strip Overview"));
     }
 
     #[test]
