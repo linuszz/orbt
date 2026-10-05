@@ -166,6 +166,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         width: modal_w,
         height: modal_h,
     };
+    crate::tui::dim_outside(frame, modal_area);
 
     frame.render_widget(Clear, modal_area);
 
@@ -182,6 +183,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         truncate_str(&modal.agent_name, 24)
     );
     let block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .title(title)
         .title_style(
             Style::default()

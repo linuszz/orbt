@@ -134,6 +134,25 @@ pub fn agent_panel_width(term_w: u16, mode: AgentPanelMode) -> u16 {
     }
 }
 
+/// Dim every cell outside `keep`, giving a blocking overlay a backdrop without
+/// a separate shade layer. Draw the overlay after calling this.
+pub fn dim_outside(frame: &mut Frame, keep: Rect) {
+    let buf = frame.buffer_mut();
+    let buf_area = buf.area;
+    for cy in buf_area.y..buf_area.y + buf_area.height {
+        for cx in buf_area.x..buf_area.x + buf_area.width {
+            let in_keep = cx >= keep.x
+                && cx < keep.x + keep.width
+                && cy >= keep.y
+                && cy < keep.y + keep.height;
+            if !in_keep {
+                let cell = &mut buf[(cx, cy)];
+                cell.modifier.insert(Modifier::DIM);
+            }
+        }
+    }
+}
+
 pub fn render(frame: &mut Frame, app: &App) {
     let area = frame.area();
 
@@ -303,20 +322,7 @@ pub fn render(frame: &mut Frame, app: &App) {
                 .iter()
                 .any(|a| a.status == orbt_protocol::AgentStatus::Blocked);
             let modal_area = widgets::agent_monitor::fs_modal_layout(area, any_blocked).area;
-            let buf = frame.buffer_mut();
-            let buf_area = buf.area;
-            for cy in buf_area.y..buf_area.y + buf_area.height {
-                for cx in buf_area.x..buf_area.x + buf_area.width {
-                    let in_modal = cx >= modal_area.x
-                        && cx < modal_area.x + modal_area.width
-                        && cy >= modal_area.y
-                        && cy < modal_area.y + modal_area.height;
-                    if !in_modal {
-                        let cell = &mut buf[(cx, cy)];
-                        cell.modifier.insert(Modifier::DIM);
-                    }
-                }
-            }
+            dim_outside(frame, modal_area);
             widgets::agent_monitor::render_fullscreen_modal(frame, area, app);
         }
         if app.agent_detail_modal.is_some() {
@@ -1056,7 +1062,7 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                 columns,
                 effective,
                 area.width,
-                app.strip_scroll,
+                app.visual_scroll(),
                 app.active_pane,
             );
             let areas = strip_areas_at(columns, effective, area, scroll);
@@ -1147,17 +1153,27 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
 
     let border_color = if is_active { accent() } else { border_dim() };
 
-    // Position within the strip, so a scrolled-away pane is still identifiable.
+    // Position within the strip, so a scrolled-away pane is still identifiable,
+    // plus the directory the pane is working in so identical shells are told
+    // apart without focusing them.
+    let cwd_label = app
+        .panes
+        .get(&pane_id)
+        .map(|p| p.cwd.as_str())
+        .filter(|c| !c.is_empty())
+        .and_then(|c| c.rsplit('/').find(|seg| !seg.is_empty()))
+        .map(|base| format!(" · {base}"))
+        .unwrap_or_default();
     let title = if total > 1 {
         if is_active {
-            format!(" {pane_idx}/{total} *")
+            format!(" {pane_idx}/{total}{cwd_label} *")
         } else {
-            format!(" {pane_idx}/{total} ")
+            format!(" {pane_idx}/{total}{cwd_label} ")
         }
     } else if is_active {
-        " 1 *".to_string()
+        format!(" 1{cwd_label} *")
     } else {
-        " 1".to_string()
+        format!(" 1{cwd_label}")
     };
 
     let block = Block::default()
@@ -1499,8 +1515,8 @@ mod tests {
         assert!(buffer_contains(&terminal, "main"));
         // Sidebar should show space name "dev"
         assert!(buffer_contains(&terminal, "dev"));
-        // Pane border should show pane number
-        assert!(buffer_contains(&terminal, "1 *"));
+        // Pane border shows its number and the directory it works in.
+        assert!(buffer_contains(&terminal, "1 · project *"));
         // Status bar should show space name and idle satellite status
         assert!(buffer_contains(&terminal, "[SPACE]"));
         assert!(buffer_contains(&terminal, "idle"));
@@ -1630,9 +1646,9 @@ mod tests {
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
 
-        // Both panes show their position in the strip; the focused one is marked.
-        assert!(buffer_contains(&terminal, "1/2 *"));
-        assert!(buffer_contains(&terminal, "2/2"));
+        // Both panes show their position and cwd; the focused one is marked.
+        assert!(buffer_contains(&terminal, "1/2 · project *"));
+        assert!(buffer_contains(&terminal, "2/2 · tmp"));
     }
 
     #[test]

@@ -678,6 +678,49 @@ pub struct AppToast {
     pub expires_tick: u64,
 }
 
+/// Ticks (16 ms) a strip scroll takes to glide to its target.
+pub const SCROLL_ANIM_TICKS: u64 = 10;
+/// Ticks the pane overview takes to grow open.
+pub const OVERVIEW_ANIM_TICKS: u64 = 8;
+
+/// Cubic ease-in-out: slow start, fast middle, soft landing (the tuios curve).
+pub fn ease_in_out_cubic(t: f32) -> f32 {
+    if t < 0.5 {
+        4.0 * t * t * t
+    } else {
+        let p = 2.0 * t - 2.0;
+        1.0 + p * p * p / 2.0
+    }
+}
+
+/// A scalar glide between two values, clocked by `App::tick_count`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Anim {
+    pub start_tick: u64,
+    pub duration: u64,
+    pub from: f32,
+    pub to: f32,
+}
+
+impl Anim {
+    /// Eased value at `tick`, or `None` once finished.
+    pub fn value_at(&self, tick: u64) -> Option<f32> {
+        if self.duration == 0 {
+            return None;
+        }
+        let elapsed = tick.saturating_sub(self.start_tick);
+        if elapsed >= self.duration {
+            return None;
+        }
+        let raw = (elapsed as f32 / self.duration as f32).clamp(0.0, 1.0);
+        Some(self.from + (self.to - self.from) * ease_in_out_cubic(raw))
+    }
+
+    pub fn is_running(&self, tick: u64) -> bool {
+        self.value_at(tick).is_some()
+    }
+}
+
 pub struct App {
     pub panes: HashMap<PaneId, PaneState>,
     pub tabs: Vec<Tab>,
@@ -705,6 +748,10 @@ pub struct App {
     /// the focus, and the focus still pulls it along when it would otherwise
     /// leave the viewport.
     pub strip_scroll: usize,
+    /// Glide toward `strip_scroll`; while set, drawing uses the eased midpoint.
+    pub strip_scroll_anim: Option<Anim>,
+    /// Tick the pane overview opened at, so it can grow from nothing.
+    pub overview_anim_start: Option<u64>,
     pub context_menu: Option<ContextMenu>,
     pub space_name: String,
     pub space_path: String,
@@ -902,6 +949,8 @@ impl App {
             show_help: false,
             show_overview: false,
             strip_scroll: 0,
+            strip_scroll_anim: None,
+            overview_anim_start: None,
             context_menu: None,
             space_name: spaces
                 .get(active_space_idx)
@@ -1134,17 +1183,80 @@ impl App {
         }
     }
 
-    /// Drag the strip along only far enough to bring the focused pane on screen.
-    ///
-    /// The band stays where the user put it while the new pane is already visible,
+    /// The scroll offset to draw with: the eased midpoint while gliding, the
+    /// settled value otherwise.
+    pub fn visual_scroll(&self) -> usize {
+        if let Some(anim) = &self.strip_scroll_anim {
+            return anim
+                .value_at(self.tick_count)
+                .unwrap_or(anim.to)
+                .round()
+                .max(0.0) as usize;
+        }
+        self.strip_scroll
+    }
+
+    /// Glide the strip to `target`. A repeated call with the same target keeps
+    /// the glide already in flight; a new target re-aims from wherever the
+    /// viewport has visibly reached, so chained moves stay smooth.
+    pub fn set_strip_scroll(&mut self, target: usize) {
+        if let Some(anim) = &self.strip_scroll_anim {
+            if anim.to == target as f32 {
+                return;
+            }
+        } else if self.strip_scroll == target {
+            return;
+        }
+        let from = self.visual_scroll();
+        self.strip_scroll = target;
+        if from == target {
+            self.strip_scroll_anim = None;
+        } else {
+            self.strip_scroll_anim = Some(Anim {
+                start_tick: self.tick_count,
+                duration: SCROLL_ANIM_TICKS,
+                from: from as f32,
+                to: target as f32,
+            });
+        }
+        self.needs_redraw = true;
+    }
+
+    /// Snap finished glides to their targets and retire them.
+    pub fn finish_animations(&mut self) {
+        if let Some(anim) = &self.strip_scroll_anim {
+            if !anim.is_running(self.tick_count) {
+                self.strip_scroll = anim.to.max(0.0) as usize;
+                self.strip_scroll_anim = None;
+            }
+        }
+        if let Some(start) = self.overview_anim_start {
+            if self.tick_count >= start + OVERVIEW_ANIM_TICKS {
+                self.overview_anim_start = None;
+            }
+        }
+    }
+
+    /// True while any glide is in flight, so the tick keeps running for it.
+    pub fn has_active_animations(&self) -> bool {
+        self.strip_scroll_anim
+            .as_ref()
+            .is_some_and(|a| a.is_running(self.tick_count))
+            || self.overview_anim_start.is_some()
+    }
+
     /// so walking along a row of panes does not scroll the world out from under
     /// them.
+    ///
+    /// Drag the strip along only far enough to bring the focused pane on screen;
+    /// the band stays where the user put it while the new pane is already visible.
     pub fn pull_strip_into_view(&mut self, viewport_width: u16) {
         if self.zoomed_pane.is_some() {
             return;
         }
         if !self.pane_tree().is_strip() {
             self.strip_scroll = 0;
+            self.strip_scroll_anim = None;
             return;
         }
         if let PaneLayout::Strip {
@@ -1152,15 +1264,15 @@ impl App {
             column_width,
         } = self.pane_tree()
         {
-            self.strip_scroll = crate::tui::strip_scroll_resolve(
+            let target = crate::tui::strip_scroll_resolve(
                 columns,
                 *column_width,
                 viewport_width,
-                self.strip_scroll,
+                self.visual_scroll(),
                 self.active_pane,
             );
+            self.set_strip_scroll(target);
         }
-        self.needs_redraw = true;
     }
 
     pub fn toggle_zoom(&mut self) {
@@ -1691,6 +1803,110 @@ pub mod tests {
             launch_cmd: None,
         });
         App::from_welcome(&state, w, h)
+    }
+
+    #[test]
+    fn ease_in_out_cubic_endpoints_and_midpoint() {
+        assert_eq!(ease_in_out_cubic(0.0), 0.0);
+        assert_eq!(ease_in_out_cubic(0.5), 0.5);
+        assert_eq!(ease_in_out_cubic(1.0), 1.0);
+        // Ease-in: the first quarter moves less than linear would.
+        assert!(ease_in_out_cubic(0.25) < 0.25);
+        // Ease-out: the third quarter is ahead of linear.
+        assert!(ease_in_out_cubic(0.75) > 0.75);
+        // Monotonic across the whole curve.
+        let mut prev = -1.0f32;
+        for i in 0..=100 {
+            let v = ease_in_out_cubic(i as f32 / 100.0);
+            assert!(v >= prev, "not monotonic at {i}");
+            prev = v;
+        }
+    }
+
+    #[test]
+    fn anim_value_at_before_during_after() {
+        let anim = Anim {
+            start_tick: 10,
+            duration: 10,
+            from: 0.0,
+            to: 100.0,
+        };
+        assert_eq!(anim.value_at(10), Some(0.0), "starts exactly at from");
+        let mid = anim.value_at(15).expect("mid-glide has a value");
+        assert!((mid - 50.0).abs() < 0.01, "half the ticks is half the way");
+        assert_eq!(anim.value_at(20), None, "finished at duration");
+        assert_eq!(anim.value_at(99), None, "and stays finished");
+        // Zero duration is instant.
+        let instant = Anim {
+            start_tick: 0,
+            duration: 0,
+            from: 1.0,
+            to: 2.0,
+        };
+        assert_eq!(instant.value_at(0), None);
+    }
+
+    #[test]
+    fn set_strip_scroll_glides_and_settles() {
+        let mut app = make_test_app(120, 30);
+        app.tick_count = 100;
+
+        // A new target starts a glide; the logical target is recorded at once so
+        // resolve calls keep working, while drawing reads the eased midpoint.
+        app.set_strip_scroll(80);
+        assert_eq!(app.strip_scroll, 80);
+        assert!(app.strip_scroll_anim.is_some());
+        assert!(app.has_active_animations());
+
+        app.tick_count = 105; // halfway through a 10-tick glide
+        let visual = app.visual_scroll();
+        assert!(
+            (30..=50).contains(&visual),
+            "halfway eased from 0 to 80 is near 40, got {visual}"
+        );
+
+        // Re-asking for the same target keeps the glide in flight rather than
+        // restarting it.
+        let before = app.strip_scroll_anim;
+        app.set_strip_scroll(80);
+        assert_eq!(app.strip_scroll_anim, before);
+
+        // Completion snaps exactly onto the target and retires the glide.
+        app.tick_count = 110;
+        app.finish_animations();
+        assert_eq!(app.strip_scroll, 80);
+        assert!(app.strip_scroll_anim.is_none());
+        assert!(!app.has_active_animations());
+        assert_eq!(app.visual_scroll(), 80);
+    }
+
+    #[test]
+    fn set_strip_scroll_retargets_from_where_the_view_has_reached() {
+        let mut app = make_test_app(120, 30);
+        app.tick_count = 100;
+        app.set_strip_scroll(80);
+        app.tick_count = 105; // visible around 40
+        let visible = app.visual_scroll();
+
+        // A new target starts from the visible position, not from 0 and not from
+        // the old target, so a chained move does not jump.
+        app.set_strip_scroll(0);
+        let anim = app.strip_scroll_anim.expect("retargeting starts a glide");
+        assert_eq!(anim.from, visible as f32);
+        assert_eq!(anim.to, 0.0);
+        assert_eq!(anim.start_tick, 105);
+    }
+
+    #[test]
+    fn overview_anim_runs_for_its_duration_then_clears() {
+        let mut app = make_test_app(120, 30);
+        app.tick_count = 50;
+        app.overview_anim_start = Some(50);
+        assert!(app.has_active_animations());
+        app.tick_count = 50 + OVERVIEW_ANIM_TICKS;
+        app.finish_animations();
+        assert!(app.overview_anim_start.is_none());
+        assert!(!app.has_active_animations());
     }
 
     /// Helper: build a minimal FullState for constructing App instances in tests.

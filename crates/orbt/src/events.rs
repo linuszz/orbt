@@ -138,6 +138,11 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
         }
         "strip_overview" => {
             app.show_overview = !app.show_overview;
+            app.overview_anim_start = if app.show_overview {
+                Some(app.tick_count)
+            } else {
+                None
+            };
             app.needs_redraw = true;
         }
         "zoom_pane" => {
@@ -878,6 +883,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') | KeyCode::Char('o') => {
                 app.show_overview = false;
+                app.overview_anim_start = None;
             }
             KeyCode::Left | KeyCode::Right => {
                 let forward = key.code == KeyCode::Right;
@@ -899,6 +905,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
             }
             KeyCode::Up | KeyCode::Down if shift => {
                 app.show_overview = false;
+                app.overview_anim_start = None;
                 app.cycle_focus(key.code == KeyCode::Down);
                 let _ = writer
                     .send(ClientMessage::FocusPane {
@@ -909,6 +916,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
             }
             KeyCode::Enter => {
                 app.show_overview = false;
+                app.overview_anim_start = None;
             }
             _ => {}
         }
@@ -1492,11 +1500,13 @@ pub async fn run(
         tokio::select! {
             biased;
 
-            // Animation tick: 16 ms, only when agents need it (§6.5 redraw-on-demand).
+            // Animation tick: 16 ms, while agents pulse or a glide is in flight
+            // (§6.5 redraw-on-demand — no tick at all when nothing moves).
             _ = tokio::time::sleep(std::time::Duration::from_millis(16)),
-                if app.has_active_agents() =>
+                if app.has_active_agents() || app.has_active_animations() =>
             {
                 app.tick_count = app.tick_count.wrapping_add(1);
+                app.finish_animations();
                 app.needs_redraw = true;
             }
 
@@ -2030,7 +2040,7 @@ async fn handle_mobile_mouse(
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
                             pane_area,
-                            app.strip_scroll,
+                            app.visual_scroll(),
                         );
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
@@ -2533,6 +2543,7 @@ async fn handle_mouse(
             {
                 app.active_pane = pane;
                 app.show_overview = false;
+                app.overview_anim_start = None;
                 app.needs_redraw = true;
                 let _ = writer
                     .send(ClientMessage::FocusPane {
@@ -2775,7 +2786,7 @@ async fn handle_mouse(
                         columns,
                         effective,
                         band.width,
-                        app.strip_scroll,
+                        app.visual_scroll(),
                         focus,
                     );
                     let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
@@ -2815,6 +2826,7 @@ async fn handle_mouse(
 
                     if on(nav.overview_hit) {
                         app.show_overview = true;
+                        app.overview_anim_start = Some(app.tick_count);
                         app.needs_redraw = true;
                         return;
                     }
@@ -2839,7 +2851,7 @@ async fn handle_mouse(
                         let cell = (mouse.column - nav.track.x) as usize;
                         let total = count * effective.max(1) as usize;
                         let band_pos = cell * total / nav.track.width.max(1) as usize;
-                        app.strip_scroll = band_pos.min(max_scroll);
+                        app.set_strip_scroll(band_pos.min(max_scroll));
                         // Bring the focused pane along only if the jump left it off
                         // screen, so the border still marks something you can see.
                         if let Some(target) =
@@ -3164,7 +3176,7 @@ async fn handle_mouse(
                 }
             }
             let areas =
-                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.strip_scroll);
+                orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll());
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
                     && mouse.column < rect.x + rect.width
@@ -3273,8 +3285,11 @@ async fn handle_mouse(
                     width: term_w.saturating_sub(sidebar_w + agent_w),
                     height: term_h.saturating_sub(3),
                 };
-                let areas =
-                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.strip_scroll);
+                let areas = orbt_tui::tui::compute_leaf_areas(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                );
                 let mut found_pane = None;
                 for (pid, rect) in &areas {
                     if mouse.column >= rect.x
@@ -3377,7 +3392,7 @@ async fn handle_mouse(
                     let areas = orbt_tui::tui::compute_leaf_areas(
                         &app.layout(),
                         pane_area,
-                        app.strip_scroll,
+                        app.visual_scroll(),
                     );
                     for (pid, rect) in &areas {
                         if *pid == app.active_pane
@@ -3409,8 +3424,11 @@ async fn handle_mouse(
                 .map(|s| s.pane_id);
             if let Some(sel_pane_id) = drag_info {
                 let pane_area = content_area(term_size, app);
-                let areas =
-                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.strip_scroll);
+                let areas = orbt_tui::tui::compute_leaf_areas(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                );
                 for (pid, rect) in &areas {
                     if *pid == sel_pane_id {
                         let inner_x = rect.x + 1;
@@ -3438,8 +3456,11 @@ async fn handle_mouse(
             // Forward mouse release to PTY if mouse reporting is active
             if app.drag_split.is_none() && app.drag_tab.is_none() {
                 let pane_area = content_area(term_size, app);
-                let areas =
-                    orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.strip_scroll);
+                let areas = orbt_tui::tui::compute_leaf_areas(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                );
                 for (pid, rect) in &areas {
                     if *pid == app.active_pane
                         && mouse.column > rect.x

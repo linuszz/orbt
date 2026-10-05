@@ -71,6 +71,38 @@ pub fn layout(node: &PaneLayout, area: Rect, focus: PaneId) -> Vec<Card> {
     cards
 }
 
+/// How far the open animation has run: 0 while the cards are points, 1 when
+/// they fill their slots. Settled (or never animated) reads as 1.
+fn open_progress(app: &App) -> f32 {
+    app.overview_anim_start
+        .and_then(|start| {
+            crate::app::Anim {
+                start_tick: start,
+                duration: crate::app::OVERVIEW_ANIM_TICKS,
+                from: 0.0,
+                to: 1.0,
+            }
+            .value_at(app.tick_count)
+        })
+        .unwrap_or(1.0)
+}
+
+/// Scale a card around its own centre, so the overview blooms out of the strip
+/// rather than snapping in.
+fn grow(rect: Rect, p: f32) -> Rect {
+    if p >= 1.0 {
+        return rect;
+    }
+    let w = (rect.width as f32 * p).round().max(0.0) as u16;
+    let h = (rect.height as f32 * p).round().max(0.0) as u16;
+    Rect {
+        x: rect.x + rect.width.saturating_sub(w) / 2,
+        y: rect.y + rect.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let cards = layout(app.pane_tree(), area, app.active_pane);
     if cards.is_empty() {
@@ -79,6 +111,7 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
 
     let total = cards.len();
     let block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .style(Style::default().bg(bg_secondary()).fg(fg_primary()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border()))
@@ -97,8 +130,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     };
 
     let leaves = app.pane_tree().leaves();
+    let progress = open_progress(app);
     for card in &cards {
-        render_card(frame, inner, card, app, &leaves, total);
+        render_card(frame, inner, card, app, &leaves, total, progress);
     }
 }
 
@@ -109,14 +143,16 @@ fn render_card(
     app: &App,
     leaves: &[PaneId],
     total: usize,
+    progress: f32,
 ) {
-    let rect = card.rect.intersection(area);
+    let rect = grow(card.rect, progress).intersection(area);
     if rect.width < 3 || rect.height < 3 {
         return;
     }
 
     let edge = if card.focused { accent() } else { border_dim() };
     let block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .style(Style::default().bg(bg_secondary()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(edge).add_modifier(if card.focused {
@@ -241,6 +277,32 @@ pub fn card_at(cards: &[Card], col: u16, row: u16) -> Option<PaneId> {
 mod tests {
     use super::*;
     use orbt_protocol::StripColumn;
+
+    #[test]
+    fn grow_scales_around_the_centre_and_settles() {
+        let rect = Rect {
+            x: 10,
+            y: 10,
+            width: 40,
+            height: 20,
+        };
+        let half = grow(rect, 0.5);
+        assert_eq!(half.width, 20);
+        assert_eq!(half.height, 10);
+        // Same centre: 10+20 == 10+20, 10+10 == 10+10.
+        assert_eq!(half.x + half.width / 2, rect.x + rect.width / 2);
+        assert_eq!(half.y + half.height / 2, rect.y + rect.height / 2);
+
+        let start = grow(rect, 0.0);
+        assert_eq!(start.width, 0, "a closed overview is a point");
+        assert_eq!(grow(rect, 1.0), rect, "settled means untouched");
+    }
+
+    #[test]
+    fn open_progress_is_full_when_never_animated() {
+        let app = crate::app::tests::make_test_app(120, 30);
+        assert_eq!(open_progress(&app), 1.0);
+    }
 
     fn strip() -> PaneLayout {
         PaneLayout::Strip {

@@ -32,10 +32,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         width: modal_w,
         height: modal_h,
     };
+    crate::tui::dim_outside(frame, modal_area);
 
     frame.render_widget(Clear, modal_area);
 
     let block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .style(Style::default().bg(bg_secondary()).fg(fg_primary()))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border()))

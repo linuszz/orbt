@@ -2,7 +2,7 @@ use ratatui::{
     layout::Rect,
     style::{Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, Borders, Clear, Paragraph},
     Frame,
 };
 
@@ -34,10 +34,12 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         width: modal_w,
         height: modal_h,
     };
+    crate::tui::dim_outside(frame, modal_area);
 
     frame.render_widget(Clear, modal_area);
 
     let outer_block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .title(" Launch Agent ")
         .title_style(Style::default().fg(accent()).add_modifier(Modifier::BOLD))
         .borders(Borders::ALL)
@@ -233,8 +235,8 @@ fn render_section_label(frame: &mut Frame, x: u16, y: u16, w: u16, label: &str, 
 fn render_box(frame: &mut Frame, x: u16, y: u16, w: u16, h: u16, focused: bool) {
     let border_color = if focused { accent() } else { border() };
     let block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .borders(Borders::ALL)
-        .border_type(BorderType::Plain)
         .border_style(Style::default().fg(border_color))
         .style(Style::default().bg(bg_secondary()));
     frame.render_widget(
