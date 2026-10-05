@@ -134,6 +134,27 @@ pub fn agent_panel_width(term_w: u16, mode: AgentPanelMode) -> u16 {
     }
 }
 
+/// The window controls riding a pane's top border, tuios-style.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WinButton {
+    Close,
+    /// Zoom when the pane is one of several, restore when it is zoomed.
+    Zoom,
+}
+
+/// Hit rects for a pane's window controls, on the top border row, right side.
+/// `zoomed` swaps the zoom glyph for restore. Kept pure so drawing and
+/// click-testing always agree on where the buttons are.
+pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 2] {
+    let at = |dx: u16| Rect {
+        x: rect.x + rect.width.saturating_sub(dx),
+        y: rect.y,
+        width: 1,
+        height: 1,
+    };
+    [(WinButton::Close, at(4)), (WinButton::Zoom, at(2))]
+}
+
 /// Scale a rect around its own centre, so freshly opened things bloom into
 /// their slot rather than snapping in. `p` below 1 shrinks; 1 returns it whole.
 pub fn grow_rect(rect: Rect, p: f32) -> Rect {
@@ -1216,41 +1237,7 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
         format!(" 1{cwd_label}")
     };
 
-    // Top-right chip, tuios-style: the agent bound to this pane as a status
-    // glyph plus its name, falling back to the pane's own title when no agent
-    // is bound. The pill caps keep it readable against the border line.
-    let mut chip: Vec<Span> = Vec::new();
-    if let Some(agent) = app.agents.iter().find(|a| a.pane_id == Some(pane_id)) {
-        use orbt_protocol::AgentStatus as A;
-        let (glyph, glyph_color) = match agent.status {
-            A::Working => ("\u{25cf}", accent()),
-            A::Blocked => ("\u{25b2}", accent_blocked()),
-            A::Error => ("\u{00d7}", accent_error()),
-            A::Done => ("\u{25a0}", accent_idle()),
-            A::Idle => ("\u{25cb}", fg_muted()),
-        };
-        chip = vec![
-            Span::styled("\u{258f} ", Style::default().fg(border_color)),
-            Span::styled(glyph, Style::default().fg(glyph_color)),
-            Span::styled(
-                format!(" {} ", agent.name),
-                Style::default().fg(border_color),
-            ),
-            Span::styled("\u{2595}", Style::default().fg(border_color)),
-        ];
-    } else if let Some(pane_title) = app
-        .panes
-        .get(&pane_id)
-        .map(|p| p.title.as_str())
-        .filter(|t| !t.is_empty())
-    {
-        chip = vec![Span::styled(
-            format!("\u{258f} {pane_title} \u{2595}"),
-            Style::default().fg(border_color),
-        )];
-    }
-
-    let mut block = Block::default()
+    let block = Block::default()
         .border_type(ratatui::widgets::BorderType::Rounded)
         .borders(Borders::ALL)
         .border_style(
@@ -1268,11 +1255,37 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
                 .fg(if is_active { accent_idle() } else { fg_muted() })
                 .add_modifier(Modifier::BOLD),
         ));
-    if !chip.is_empty() {
-        block = block.title(Line::from(chip).right_aligned());
-    }
+
     let inner = block.inner(area);
     frame.render_widget(block, area);
+
+    // Window controls punched into the top border, macOS order: close, then
+    // zoom (restore while zoomed). Too narrow a pane has no room for them.
+    if area.width >= 10 {
+        let zoomed = app.zoomed_pane == Some(pane_id);
+        let blank = Style::default().bg(bg_primary());
+        for (button, at) in pane_button_rects(area) {
+            let (glyph, color) = match button {
+                WinButton::Close => ("\u{00d7}", accent_error()),
+                WinButton::Zoom if zoomed => ("\u{2212}", accent_blocked()),
+                WinButton::Zoom => ("+", accent_idle()),
+            };
+            let pad = Rect {
+                x: at.x.saturating_sub(1),
+                y: at.y,
+                width: 3,
+                height: 1,
+            };
+            frame.render_widget(Block::default().style(blank), pad);
+            frame.render_widget(
+                Paragraph::new(Span::styled(
+                    glyph,
+                    Style::default().fg(color).bg(bg_primary()),
+                )),
+                at,
+            );
+        }
+    }
 
     if let Some(pane) = app.panes.get(&pane_id) {
         let scroll_offset = if is_active {
@@ -1704,47 +1717,109 @@ mod tests {
     }
 
     #[test]
-    fn pane_top_right_chip_shows_agent_badge() {
+    fn window_controls_ride_the_top_border_right_side() {
         let mut state = minimal_state();
-        state.agents.push(orbt_protocol::AgentInfo {
-            id: orbt_protocol::AgentId(9),
-            name: "claude-1".to_string(),
-            space_id: SpaceId(1),
-            pane_id: Some(PaneId(1)),
-            model: String::new(),
-            status: orbt_protocol::AgentStatus::Working,
-            detail: None,
-            protocol: orbt_protocol::AgentProtocol::Heuristic,
-            launch_cmd: None,
+        state.spaces[0].tabs[0].layout = PaneLayout::Split {
+            direction: SplitDir::Horizontal,
+            ratio: 0.5,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+        };
+        state.spaces[0].panes.push(PaneInfo {
+            id: PaneId(2),
+            tab_id: TabId(1),
+            title: String::new(),
+            cwd: "/tmp".to_string(),
+            cell_grid: CellGrid::new(80, 24),
         });
         let app = App::from_welcome(&state, 120, 30);
         let backend = TestBackend::new(120, 30);
         let mut terminal = Terminal::new(backend).unwrap();
         terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
 
-        assert!(
-            buffer_contains(&terminal, "claude-1"),
-            "the bound agent's name rides the top border"
+        // Every pane carries a close and a zoom button where the geometry says.
+        for (pid, rect) in compute_leaf_areas(
+            &app.layout(),
+            Rect {
+                x: 24,
+                y: 1,
+                width: 96,
+                height: 27,
+            },
+            0,
+        ) {
+            for (button, at) in pane_button_rects(rect) {
+                let glyph = buf[(at.x, at.y)].symbol();
+                match button {
+                    WinButton::Close => assert_eq!(glyph, "\u{00d7}", "close at {at:?}"),
+                    WinButton::Zoom => assert_eq!(glyph, "+", "zoom at {at:?}"),
+                }
+                let _ = pid;
+            }
+        }
+    }
+
+    #[test]
+    fn a_zoomed_panes_control_becomes_restore() {
+        let mut state = minimal_state();
+        state.spaces[0].tabs[0].layout = PaneLayout::Split {
+            direction: SplitDir::Horizontal,
+            ratio: 0.5,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+        };
+        state.spaces[0].panes.push(PaneInfo {
+            id: PaneId(2),
+            tab_id: TabId(1),
+            title: String::new(),
+            cwd: "/tmp".to_string(),
+            cell_grid: CellGrid::new(80, 24),
+        });
+        let mut app = App::from_welcome(&state, 120, 30);
+        app.toggle_zoom();
+        assert_eq!(app.zoomed_pane, Some(PaneId(1)));
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let leaves = compute_leaf_areas(
+            &app.layout(),
+            Rect {
+                x: 24,
+                y: 1,
+                width: 96,
+                height: 27,
+            },
+            0,
         );
-        assert!(
-            buffer_contains(&terminal, "\u{25cf}"),
-            "with its working-state glyph"
+        let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
+        let zoom_at = pane_button_rects(*rect)[1].1;
+        assert_eq!(
+            buf[(zoom_at.x, zoom_at.y)].symbol(),
+            "\u{2212}",
+            "zoomed means the zoom button offers restore"
         );
     }
 
     #[test]
-    fn pane_top_right_chip_falls_back_to_pane_title() {
-        let mut state = minimal_state();
-        state.spaces[0].panes[0].title = "vim — main.rs".to_string();
-        let app = App::from_welcome(&state, 120, 30);
-        let backend = TestBackend::new(120, 30);
-        let mut terminal = Terminal::new(backend).unwrap();
-        terminal.draw(|f| render(f, &app)).unwrap();
-
-        assert!(
-            buffer_contains(&terminal, "vim"),
-            "an untitled pane shows nothing, a titled one shows its title"
-        );
+    fn button_rects_sit_on_the_border_row_clear_of_the_corner() {
+        let rect = Rect {
+            x: 10,
+            y: 5,
+            width: 40,
+            height: 12,
+        };
+        let [(cb, c), (zb, z)] = pane_button_rects(rect);
+        assert_eq!(cb, WinButton::Close);
+        assert_eq!(zb, WinButton::Zoom);
+        assert_eq!(c.y, rect.y, "on the border row");
+        assert_eq!(z.y, rect.y);
+        let corner = rect.x + rect.width - 1;
+        assert!(c.x < z.x, "close left of zoom, macOS order");
+        assert!(z.x < corner, "never on the corner glyph itself");
+        assert!(c.x > rect.x + rect.width / 2, "right half of the border");
     }
 
     #[test]

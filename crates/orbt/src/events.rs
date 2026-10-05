@@ -3177,6 +3177,53 @@ async fn handle_mouse(
             }
             let areas =
                 orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll());
+            // Window controls on the border row win over anything inside the
+            // pane, the same rule tuios gives its title-bar buttons.
+            let mut button_hit = false;
+            for (pid, rect) in &areas {
+                if rect.width < 10 {
+                    continue;
+                }
+                for (button, at) in orbt_tui::tui::pane_button_rects(*rect) {
+                    if mouse.column == at.x && mouse.row == at.y {
+                        match button {
+                            orbt_tui::tui::WinButton::Close => {
+                                if app.pane_tree().leaves().len() <= 1 {
+                                    app.should_quit = true;
+                                }
+                                let _ = writer
+                                    .send(ClientMessage::ClosePane {
+                                        tab_id: app.active_tab_id,
+                                        pane_id: *pid,
+                                    })
+                                    .await;
+                            }
+                            orbt_tui::tui::WinButton::Zoom => {
+                                if app.active_pane != *pid {
+                                    app.active_pane = *pid;
+                                    let _ = writer
+                                        .send(ClientMessage::FocusPane {
+                                            tab_id: app.active_tab_id,
+                                            pane_id: *pid,
+                                        })
+                                        .await;
+                                }
+                                app.toggle_zoom();
+                                app.needs_resize = true;
+                            }
+                        }
+                        app.needs_redraw = true;
+                        button_hit = true;
+                        break;
+                    }
+                }
+                if button_hit {
+                    break;
+                }
+            }
+            if button_hit {
+                return;
+            }
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
                     && mouse.column < rect.x + rect.width
