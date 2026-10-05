@@ -2109,6 +2109,7 @@ pub mod tests {
                 orbt_protocol::StripColumn::single(PaneId(1)),
                 orbt_protocol::StripColumn {
                     panes: vec![PaneId(2), PaneId(3)],
+                    width: 0,
                 },
             ],
             column_width: 80,

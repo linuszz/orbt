@@ -172,13 +172,20 @@ async fn execute_command(
             let step: i16 = if id == "wider_column" { 8 } else { -8 };
             let mut width = None;
             let band = content_area(term_size, app);
+            let focus = app.active_pane;
             if let Some(tab) = app.tabs.get_mut(app.active_tab) {
                 if let Some((columns, current)) = tab.pane_tree.as_strip() {
-                    // Auto (0) resolves to the width on screen first, so the
-                    // first nudge steps from what the user sees, not from 0.
-                    let base = orbt_tui::tui::strip_solo_width(columns, current, band);
+                    // Nudge the focused column only: widths are per-column, and
+                    // an auto column resolves to what is on screen first, so
+                    // the first step moves from what the user sees.
+                    let widths = orbt_tui::tui::column_widths(columns, current, band.width);
+                    let base = columns
+                        .iter()
+                        .position(|column| column.panes.contains(&focus))
+                        .map(|index| widths[index])
+                        .unwrap_or(band.width / 2);
                     let next = ((base as i16 + step).clamp(20, 400)) as u16;
-                    tab.pane_tree.set_column_width(next);
+                    tab.pane_tree.set_column_width(focus, next);
                     width = Some(next);
                 }
             }
@@ -186,6 +193,7 @@ async fn execute_command(
                 let _ = writer
                     .send(ClientMessage::SetColumnWidth {
                         tab_id: app.active_tab_id,
+                        pane: focus,
                         width,
                     })
                     .await;
@@ -2807,7 +2815,7 @@ async fn handle_mouse(
                 {
                     let columns_clone = columns.clone();
                     let (effective, count, firsts) = (
-                        orbt_tui::tui::strip_solo_width(columns, *column_width, band),
+                        *column_width,
                         columns.len(),
                         columns
                             .iter()
@@ -2889,14 +2897,23 @@ async fn handle_mouse(
                         && mouse.column < nav.track.x + nav.track.width
                     {
                         let cell = (mouse.column - nav.track.x) as usize;
-                        let total = count * effective.max(1) as usize;
+                        let widths = orbt_tui::tui::column_widths(columns, effective, band.width);
+                        let total: usize = widths.iter().map(|&width| width as usize).sum();
                         let band_pos = cell * total / nav.track.width.max(1) as usize;
                         app.set_strip_scroll(band_pos.min(max_scroll));
                         // Bring the focused pane along only if the jump left it off
                         // screen, so the border still marks something you can see.
-                        if let Some(target) =
-                            firsts.get(band_pos / effective.max(1) as usize).copied()
-                        {
+                        // Columns differ in width, so the rail offset maps to a
+                        // column through their cumulative widths, not a divisor.
+                        let mut acc = 0usize;
+                        let index = widths
+                            .iter()
+                            .position(|&width| {
+                                acc += width as usize;
+                                band_pos < acc
+                            })
+                            .unwrap_or(count.saturating_sub(1));
+                        if let Some(target) = firsts.get(index).copied() {
                             app.active_pane = target;
                             let _ = writer
                                 .send(ClientMessage::FocusPane {
@@ -3252,9 +3269,9 @@ async fn handle_mouse(
                                 if let Some(tab) = app.tabs.get_mut(app.active_tab) {
                                     if let Some((columns, current)) = tab.pane_tree.as_strip() {
                                         let next = orbt_tui::tui::next_resize_width(
-                                            columns, current, band,
+                                            columns, current, band, *pid,
                                         );
-                                        tab.pane_tree.set_column_width(next);
+                                        tab.pane_tree.set_column_width(*pid, next);
                                         width = Some(next);
                                     }
                                 }
@@ -3262,6 +3279,7 @@ async fn handle_mouse(
                                     let _ = writer
                                         .send(ClientMessage::SetColumnWidth {
                                             tab_id: app.active_tab_id,
+                                            pane: *pid,
                                             width,
                                         })
                                         .await;
@@ -3449,18 +3467,47 @@ async fn handle_mouse(
                 return;
             }
             let is_strip = app.tabs[app.active_tab].pane_tree.as_strip().is_some();
-            let drag_update = if let Some(drag) = app.drag_split.as_mut() {
+            let drag_update = if let Some((first_pane, second_pane, dir, last)) = app.drag_split {
                 if is_strip {
-                    let width =
-                        (mouse.column.saturating_sub(pane_area.x) + 1).clamp(20, 400) as f32;
-                    if (width - drag.3).abs() >= 1.0 {
-                        drag.3 = width;
-                        Some((drag.0, drag.1, width))
+                    // The dragged edge is the right side of first_pane's
+                    // column; measure from that column's on-screen left edge,
+                    // which coincides with the band's left only for the first
+                    // column at zero scroll.
+                    let resolved = orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        app.active_pane,
+                    );
+                    let left_edge = match app.pane_tree() {
+                        orbt_protocol::PaneLayout::Strip {
+                            columns,
+                            column_width,
+                        } => orbt_tui::tui::strip_areas_at(
+                            columns,
+                            *column_width,
+                            pane_area,
+                            resolved,
+                        )
+                        .into_iter()
+                        .find(|(pane, _, _)| *pane == first_pane)
+                        .map(|(_, rect, skip)| rect.x as i32 - skip as i32),
+                        _ => None,
+                    };
+                    let width = left_edge
+                        .map(|left| ((mouse.column as i32 - left + 1).clamp(20, 400)) as f32);
+                    if let Some(width) = width {
+                        if (width - last).abs() >= 1.0 {
+                            app.drag_split = Some((first_pane, second_pane, dir, width));
+                            Some((first_pane, second_pane, width))
+                        } else {
+                            None
+                        }
                     } else {
                         None
                     }
                 } else {
-                    let ratio = match drag.2 {
+                    let ratio = match dir {
                         orbt_protocol::SplitDir::Horizontal => {
                             let total = pane_area.width as f32;
                             ((mouse.column as f32 - pane_area.x as f32) / total).clamp(0.1, 0.9)
@@ -3470,9 +3517,9 @@ async fn handle_mouse(
                             ((mouse.row as f32 - pane_area.y as f32) / total).clamp(0.1, 0.9)
                         }
                     };
-                    if (ratio - drag.3).abs() >= 0.02 {
-                        drag.3 = ratio;
-                        Some((drag.0, drag.1, ratio))
+                    if (ratio - last).abs() >= 0.02 {
+                        app.drag_split = Some((first_pane, second_pane, dir, ratio));
+                        Some((first_pane, second_pane, ratio))
                     } else {
                         None
                     }
@@ -3482,15 +3529,16 @@ async fn handle_mouse(
             };
             if let Some((first_pane, second_pane, value)) = drag_update {
                 if is_strip {
-                    // Strips share one column width; derive it from where the
-                    // shared edge now sits rather than from a viewport ratio.
+                    // The drag moves one column's right edge; set that
+                    // column's own width from where the edge now sits.
                     let width = value as u16;
                     if let Some(tab) = app.tabs.get_mut(app.active_tab) {
-                        tab.pane_tree.set_column_width(width);
+                        tab.pane_tree.set_column_width(first_pane, width);
                     }
                     let _ = writer
                         .send(ClientMessage::SetColumnWidth {
                             tab_id: app.active_tab_id,
+                            pane: first_pane,
                             width,
                         })
                         .await;

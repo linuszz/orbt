@@ -114,6 +114,23 @@ pub fn resolve_column_width(columns: &[StripColumn], column_width: u16, area_wid
 pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
     resolve_column_width(columns, column_width, area.width)
 }
+
+/// Every column's effective width: its own override where set, the resolved
+/// strip default elsewhere. This is the only place overrides are applied, so
+/// rendering, hit-testing, scrolling and PTY sizing cannot disagree.
+pub fn column_widths(columns: &[StripColumn], column_width: u16, area_width: u16) -> Vec<u16> {
+    let default = resolve_column_width(columns, column_width, area_width);
+    columns
+        .iter()
+        .map(|column| {
+            if column.width == 0 {
+                default
+            } else {
+                column.width
+            }
+        })
+        .collect()
+}
 /// The overview is a floating panel over the strip, not a replacement for it: it
 /// keeps a margin so the panes stay visible behind it, and it grows with the
 /// tallest column so a card is never squeezed below the point of being readable.
@@ -185,8 +202,18 @@ pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 3] {
 /// 3/4 of the band in rotation, picking the step above the current width and
 /// wrapping past the top. Widths within a cell of a step count as that step,
 /// so a clicked 1/2 advances to 3/4 rather than sticking.
-pub fn next_resize_width(columns: &[StripColumn], column_width: u16, band: Rect) -> u16 {
-    let current = strip_solo_width(columns, column_width, band);
+pub fn next_resize_width(
+    columns: &[StripColumn],
+    column_width: u16,
+    band: Rect,
+    pane: PaneId,
+) -> u16 {
+    let widths = column_widths(columns, column_width, band.width);
+    let current = columns
+        .iter()
+        .position(|column| column.panes.contains(&pane))
+        .map(|index| widths[index])
+        .unwrap_or(band.width / 2);
     let steps = [band.width / 4, band.width / 2, band.width * 3 / 4];
     steps
         .into_iter()
@@ -626,8 +653,8 @@ pub fn strip_scroll_target(
     if columns.is_empty() {
         return 0;
     }
-    let width = resolve_column_width(columns, column_width, area.width) as usize;
-    let total = width * columns.len();
+    let widths = column_widths(columns, column_width, area.width);
+    let total: usize = widths.iter().map(|&width| width as usize).sum();
     let viewport = area.width as usize;
     if total <= viewport {
         return 0;
@@ -637,12 +664,17 @@ pub fn strip_scroll_target(
         .iter()
         .position(|c| c.panes.contains(&focus))
         .unwrap_or(0);
+    let left: usize = widths[..focus_col]
+        .iter()
+        .map(|&width| width as usize)
+        .sum();
+    let width = widths[focus_col] as usize;
 
     if width >= viewport {
         // The focused column is wider than the viewport; keep its trailing edge in view.
-        ((focus_col + 1) * width - viewport).min(max_scroll)
+        (left + width - viewport).min(max_scroll)
     } else {
-        (focus_col * width).min(max_scroll)
+        left.min(max_scroll)
     }
 }
 
@@ -666,16 +698,21 @@ pub fn strip_areas_at(
     if columns.is_empty() {
         return Vec::new();
     }
-    let width = resolve_column_width(columns, column_width, area.width) as usize;
-    let total = width * columns.len();
+    let widths = column_widths(columns, column_width, area.width);
+    let total: usize = widths.iter().map(|&width| width as usize).sum();
     let viewport = area.width as usize;
     let scroll = scroll.min(total.saturating_sub(viewport));
 
     let mut out = Vec::new();
+    let mut x = 0usize;
     for (ci, column) in columns.iter().enumerate() {
-        let x = ci * width;
-        let visible_start = x.max(scroll);
-        let visible_end = (x + width).min(scroll + viewport);
+        let width = widths[ci] as usize;
+        // Accumulate before anything can skip ahead: an off-screen column
+        // still occupies its span of the band.
+        let left = x;
+        x += width;
+        let visible_start = left.max(scroll);
+        let visible_end = (left + width).min(scroll + viewport);
         let col_w = visible_end.saturating_sub(visible_start) as u16;
         if col_w == 0 {
             for &pane in &column.panes {
@@ -710,7 +747,7 @@ pub fn strip_areas_at(
                     width: col_w,
                     height: h,
                 },
-                (visible_start - x) as u16,
+                (visible_start - left) as u16,
             ));
             y += h;
         }
@@ -788,9 +825,9 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
             columns,
             column_width,
         } => {
-            let effective = strip_solo_width(columns, *column_width, area);
+            let widths = column_widths(columns, *column_width, area.width);
             let mut out = Vec::new();
-            for column in columns {
+            for (column, &width) in columns.iter().zip(&widths) {
                 let n = column.panes.len();
                 if n == 0 {
                     continue;
@@ -801,7 +838,7 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
                     let h = base + u16::from(i < extra as usize);
                     out.push((
                         pane,
-                        effective.saturating_sub(2).max(1),
+                        width.saturating_sub(2).max(1),
                         h.saturating_sub(2).max(1),
                     ));
                 }
@@ -868,16 +905,19 @@ pub fn strip_scroll_resolve(
     scroll: usize,
     focus: PaneId,
 ) -> usize {
-    let width = resolve_column_width(columns, column_width, area_width) as usize;
-    let total = width * columns.len();
+    let widths = column_widths(columns, column_width, area_width);
+    let total: usize = widths.iter().map(|&width| width as usize).sum();
     let viewport = area_width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
     let scroll = scroll.min(max_scroll);
     let Some(focus_col) = columns.iter().position(|c| c.panes.contains(&focus)) else {
         return scroll;
     };
-    let pane_left = focus_col * width;
-    let pane_right = pane_left + width;
+    let pane_left: usize = widths[..focus_col]
+        .iter()
+        .map(|&width| width as usize)
+        .sum();
+    let pane_right = pane_left + widths[focus_col] as usize;
     let view_right = scroll + viewport;
     if pane_left >= scroll && pane_right <= view_right {
         return scroll;
@@ -898,7 +938,10 @@ pub fn strip_scroll_resolve(
 
 /// The furthest the band can be scrolled.
 pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
-    let total = (resolve_column_width(columns, column_width, area_width) as usize) * columns.len();
+    let total: usize = column_widths(columns, column_width, area_width)
+        .iter()
+        .map(|&width| width as usize)
+        .sum();
     total.saturating_sub(area_width.max(1) as usize)
 }
 
@@ -970,8 +1013,11 @@ pub fn strip_nav(
     let add = centre(add_hit);
     let overview = centre(overview_hit);
 
-    let width = resolve_column_width(columns, column_width, area.width) as usize;
-    let total = width * columns.len().max(1);
+    let total: usize = column_widths(columns, column_width, area.width)
+        .iter()
+        .map(|&width| width as usize)
+        .sum::<usize>()
+        .max(1);
     let viewport = area.width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
     let scroll = scroll.min(max_scroll);
@@ -1160,15 +1206,14 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             columns,
             column_width,
         } => {
-            let effective = strip_solo_width(columns, *column_width, area);
             let scroll = resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane);
-            let areas = strip_areas_at(columns, effective, area, scroll);
+            let areas = strip_areas_at(columns, *column_width, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
                 }
             }
-            render_strip_nav(frame, columns, effective, area, scroll);
+            render_strip_nav(frame, columns, *column_width, area, scroll);
         }
         PaneLayout::Split {
             direction,
@@ -2005,6 +2050,7 @@ mod tests {
         let stacked = PaneLayout::Strip {
             columns: vec![StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
+                width: 0,
             }],
             column_width: 0,
         };
@@ -2036,6 +2082,7 @@ mod tests {
         assert_eq!(strip_solo_width(&alone, 0, area), 176);
         let stacked = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+            width: 0,
         }];
         assert_eq!(strip_solo_width(&stacked, 0, area), 176);
         // Three columns auto: half-width each, the third scrolls into view.
@@ -2087,6 +2134,114 @@ mod tests {
     }
 
     #[test]
+    fn per_column_widths_drive_geometry_independently() {
+        // Three columns: the middle one carries an override, the others
+        // inherit the auto default (half band with several columns).
+        let mut columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        columns[1].width = 132;
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+
+        let widths = column_widths(&columns, 0, area.width);
+        assert_eq!(widths, vec![88, 132, 88]);
+
+        // Rects accumulate the real widths, so column 2 starts where column
+        // 1 ends; column 3 is past the viewport edge at zero scroll.
+        let x_of = |pane: u32, scroll: usize| {
+            strip_areas_at(&columns, 0, area, scroll)
+                .iter()
+                .find(|(pid, _, _)| *pid == PaneId(pane))
+                .map(|(_, r, _)| r.x)
+                .unwrap()
+        };
+        assert_eq!(x_of(1, 0), 0);
+        assert_eq!(x_of(2, 0), 88);
+
+        // Total band is 308 cells against a 176 viewport.
+        assert_eq!(strip_scroll_max(&columns, 0, area.width), 308 - 176);
+
+        // Resolving the scroll for column 3 parks it inside the viewport,
+        // measured from its own offset, not a multiple of a shared width.
+        let scroll = strip_scroll_resolve(&columns, 0, area.width, 0, PaneId(3));
+        let left = 88 + 132;
+        assert!(scroll <= left);
+        assert!(scroll + 176 >= left + 88);
+        assert_eq!(x_of(3, scroll) + 88 - 1, 175, "column 3 fully on screen");
+
+        // PTY sizing follows the same per-column widths.
+        let sizes = pane_terminal_sizes(
+            &PaneLayout::Strip {
+                columns: columns.clone(),
+                column_width: 0,
+            },
+            area,
+        );
+        let width_of = |pane: u32| {
+            sizes
+                .iter()
+                .find(|(pid, _, _)| *pid == PaneId(pane))
+                .map(|(_, w, _)| *w)
+                .unwrap()
+        };
+        assert_eq!(width_of(1), 88 - 2);
+        assert_eq!(width_of(2), 132 - 2);
+        assert_eq!(width_of(3), 88 - 2);
+    }
+
+    #[test]
+    fn resize_cycles_only_the_clicked_column() {
+        let band = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+        let mut tree = PaneLayout::Strip {
+            columns: (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect(),
+            column_width: 0,
+        };
+
+        // Clicking column 2 cycles it alone: 88 (auto half) -> 132.
+        let PaneLayout::Strip {
+            columns,
+            column_width,
+        } = &tree
+        else {
+            unreachable!()
+        };
+        let next = next_resize_width(columns, *column_width, band, PaneId(2));
+        assert_eq!(next, 132);
+        assert!(tree.set_column_width(PaneId(2), next));
+
+        let PaneLayout::Strip { columns, .. } = &tree else {
+            unreachable!()
+        };
+        assert_eq!(columns[1].width, 132, "the clicked column took the step");
+        assert_eq!(columns[0].width, 0, "its neighbours stay on the default");
+        assert_eq!(columns[2].width, 0);
+
+        // And cycling column 1 starts from its own auto width, untouched by
+        // column 2's override.
+        let PaneLayout::Strip {
+            columns,
+            column_width,
+        } = &tree
+        else {
+            unreachable!()
+        };
+        assert_eq!(
+            next_resize_width(columns, *column_width, band, PaneId(1)),
+            132,
+            "column 1 cycles from half band, not from column 2's width"
+        );
+    }
+
+    #[test]
     fn resize_cycles_quarter_half_three_quarters_then_wraps() {
         let band = Rect {
             x: 0,
@@ -2098,14 +2253,14 @@ mod tests {
             (1..=2u32).map(|i| StripColumn::single(PaneId(i))).collect();
 
         // From auto (1/2 with two columns): 1/2 -> 3/4 -> 1/4 -> 1/2.
-        assert_eq!(next_resize_width(&columns, 0, band), 132);
-        assert_eq!(next_resize_width(&columns, 132, band), 44);
-        assert_eq!(next_resize_width(&columns, 44, band), 88);
+        assert_eq!(next_resize_width(&columns, 0, band, PaneId(1)), 132);
+        assert_eq!(next_resize_width(&columns, 132, band, PaneId(1)), 44);
+        assert_eq!(next_resize_width(&columns, 44, band, PaneId(1)), 88);
 
         // An arbitrary manual width advances to the next step up.
-        assert_eq!(next_resize_width(&columns, 100, band), 132);
+        assert_eq!(next_resize_width(&columns, 100, band, PaneId(1)), 132);
         // A width within a cell of a step counts as that step, so it moves on.
-        assert_eq!(next_resize_width(&columns, 89, band), 132);
+        assert_eq!(next_resize_width(&columns, 89, band, PaneId(1)), 132);
 
         // Narrow band: wrapping past 3/4 lands on a quarter below the
         // protocol floor, which clamps up to it.
@@ -2115,7 +2270,7 @@ mod tests {
             width: 60,
             height: 40,
         };
-        assert_eq!(next_resize_width(&columns, 45, small), 20);
+        assert_eq!(next_resize_width(&columns, 45, small, PaneId(1)), 20);
     }
 
     #[test]
@@ -2865,6 +3020,7 @@ mod tests {
         let columns = vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
+                width: 0,
             },
             StripColumn::single(PaneId(3)),
             StripColumn::single(PaneId(4)),
@@ -3020,6 +3176,7 @@ mod tests {
 
         let stacked = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2)],
+            width: 0,
         }];
         assert_eq!(
             strip_solo_width(&stacked, 80, area),
@@ -3131,6 +3288,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 21);
         let c = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+            width: 0,
         }];
         let areas = strip_areas_at(&c, W, area, 0);
         assert_eq!(areas.len(), 3, "every pane in the column gets a rect");
@@ -3158,6 +3316,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let c = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+            width: 0,
         }];
         let areas = strip_areas_at(&c, W, area, 0);
         let rects: Vec<Rect> = areas.iter().map(|(_, r, _)| *r).collect();

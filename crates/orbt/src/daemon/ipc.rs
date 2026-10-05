@@ -140,9 +140,13 @@ where
                         let session = space_manager.active_session().await;
                         session.resize_split(tab_id, first_pane, second_pane, ratio).await;
                     }
-                    ClientMessage::SetColumnWidth { tab_id, width } => {
+                    ClientMessage::SetColumnWidth {
+                        tab_id,
+                        pane,
+                        width,
+                    } => {
                         let session = space_manager.active_session().await;
-                        session.set_column_width(tab_id, width).await;
+                        session.set_column_width(tab_id, pane, width).await;
                     }
                     ClientMessage::SwapPane {
                         tab_id,

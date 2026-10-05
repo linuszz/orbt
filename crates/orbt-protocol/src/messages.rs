@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 6; // was 5; PaneLayout::Strip holds columns, not a flat pane list
+pub const PROTOCOL_VERSION: u32 = 7; // was 6; StripColumn gains a per-column width override
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -90,10 +90,12 @@ pub enum ClientMessage {
         second_pane: crate::PaneId,
         ratio: f32,
     },
-    /// Set the shared column width of a strip layout. Ignored on split trees,
-    /// which use `ResizeSplit` ratios instead.
+    /// Set the width of the strip column holding `pane`, in cells; 0 clears
+    /// the override so the column follows the strip default. Ignored on split
+    /// trees, which use `ResizeSplit` ratios instead.
     SetColumnWidth {
         tab_id: crate::TabId,
+        pane: crate::PaneId,
         width: u16,
     },
     /// Move `pane` one slot left (towards index 0) or right in its tab.
