@@ -93,6 +93,10 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 /// resized to match, so nothing inside it is squeezed to fit.
 pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
     if columns.len() != 1 || columns[0].panes.len() != 1 {
+        if column_width == 0 {
+            // Auto: no width chosen, so size a column for two side by side.
+            return (area.width / 2).clamp(20, 400).max(1);
+        }
         return column_width;
     }
     area.width.max(column_width)
@@ -723,6 +727,7 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
             columns,
             column_width,
         } => {
+            let effective = strip_solo_width(columns, *column_width, area);
             let mut out = Vec::new();
             for column in columns {
                 let n = column.panes.len();
@@ -735,7 +740,7 @@ pub fn pane_terminal_sizes(node: &PaneLayout, area: Rect) -> Vec<(PaneId, u16, u
                     let h = base + u16::from(i < extra as usize);
                     out.push((
                         pane,
-                        column_width.saturating_sub(2).max(1),
+                        effective.saturating_sub(2).max(1),
                         h.saturating_sub(2).max(1),
                     ));
                 }
@@ -1822,6 +1827,35 @@ mod tests {
             "\u{2212}",
             "zoomed means the zoom button offers restore"
         );
+    }
+
+    #[test]
+    fn auto_column_width_fits_two_side_by_side_until_the_user_chooses() {
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+        let pair = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+        ];
+        // Auto: two columns of half the workspace each.
+        assert_eq!(strip_solo_width(&pair, 0, area), 88);
+        // The user's explicit width always wins over auto.
+        assert_eq!(strip_solo_width(&pair, 60, area), 60);
+        // A lone pane fills the band whether auto or explicit.
+        let alone = vec![StripColumn::single(PaneId(1))];
+        assert_eq!(strip_solo_width(&alone, 0, area), 176);
+        // Auto respects the same clamps as a chosen width.
+        let narrow = Rect {
+            x: 0,
+            y: 0,
+            width: 30,
+            height: 40,
+        };
+        assert_eq!(strip_solo_width(&pair, 0, narrow), 20);
     }
 
     #[test]

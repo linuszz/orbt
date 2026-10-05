@@ -393,7 +393,7 @@ impl SessionState {
                         TabLayout::Bsp => PaneLayout::Leaf(pane_id),
                         TabLayout::Strip => PaneLayout::Strip {
                             columns: vec![orbt_protocol::StripColumn::single(pane_id)],
-                            column_width: 80,
+                            column_width: 0,
                         },
                     },
                     active_pane: pane_id,

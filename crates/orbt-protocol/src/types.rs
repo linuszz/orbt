@@ -268,7 +268,10 @@ fn default_ratio() -> f32 {
 }
 
 fn default_strip_column_width() -> u16 {
-    80
+    // 0 means auto: the client resolves it to half the workspace whenever more
+    // than one column exists, so any two panes sit side by side. Any explicit
+    // width the user picks (keys or drag) replaces it and always wins.
+    0
 }
 
 /// Which layout a newly created tab starts in.

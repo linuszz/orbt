@@ -94,7 +94,13 @@ fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layo
     }
 }
 
-async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u16) {
+async fn execute_command(
+    id: &str,
+    app: &mut App,
+    writer: &IpcWriter,
+    term_size: ratatui::layout::Rect,
+) {
+    let term_h = term_size.height;
     match id {
         "split_h" => {
             app.pending_split = Some((app.active_pane, SplitDir::Horizontal));
@@ -165,9 +171,13 @@ async fn execute_command(id: &str, app: &mut App, writer: &IpcWriter, term_h: u1
         "wider_column" | "narrower_column" => {
             let step: i16 = if id == "wider_column" { 8 } else { -8 };
             let mut width = None;
+            let band = content_area(term_size, app);
             if let Some(tab) = app.tabs.get_mut(app.active_tab) {
-                if let Some((_, current)) = tab.pane_tree.as_strip() {
-                    let next = ((current as i16 + step).clamp(20, 400)) as u16;
+                if let Some((columns, current)) = tab.pane_tree.as_strip() {
+                    // Auto (0) resolves to the width on screen first, so the
+                    // first nudge steps from what the user sees, not from 0.
+                    let base = orbt_tui::tui::strip_solo_width(columns, current, band);
+                    let next = ((base as i16 + step).clamp(20, 400)) as u16;
                     tab.pane_tree.set_column_width(next);
                     width = Some(next);
                 }
@@ -855,7 +865,13 @@ async fn handle_mobile_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, _te
     }
 }
 
-async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u16) {
+async fn handle_key(
+    key: KeyEvent,
+    app: &mut App,
+    writer: &IpcWriter,
+    term_size: ratatui::layout::Rect,
+) {
+    let term_h = term_size.height;
     // Mobile-mode navigation intercepts before normal key dispatch.
     if app.mobile_mode && handle_mobile_key(key, app, writer, term_h).await {
         return;
@@ -1139,7 +1155,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                     if let Some(&cmd_idx) = filtered.get(*selected) {
                         let cmd_id = COMMANDS[cmd_idx].id;
                         app.mode = InputMode::Normal;
-                        execute_command(cmd_id, app, writer, term_h).await;
+                        execute_command(cmd_id, app, writer, term_size).await;
                         return;
                     }
                 }
@@ -1175,7 +1191,7 @@ async fn handle_key(key: KeyEvent, app: &mut App, writer: &IpcWriter, term_h: u1
                         .flatten();
                     if let Some(cmd) = shortcut_cmd {
                         app.mode = InputMode::Normal;
-                        execute_command(cmd.id, app, writer, term_h).await;
+                        execute_command(cmd.id, app, writer, term_size).await;
                         return;
                     }
                     search.push(c);
@@ -1535,8 +1551,11 @@ pub async fn run(
             raw = event_stream.next() => {
                 match raw {
                     Some(Ok(Event::Key(key))) => {
-                        let term_h = terminal.size().map(|s| s.height).unwrap_or(40);
-                        handle_key(key, app, &writer, term_h).await;
+                        let term_rect = terminal
+                            .size()
+                            .map(|s| ratatui::layout::Rect::new(0, 0, s.width, s.height))
+                            .unwrap_or(ratatui::layout::Rect::new(0, 0, 120, 40));
+                        handle_key(key, app, &writer, term_rect).await;
                     }
                     Some(Ok(Event::Resize(cols, rows))) => {
                         let was_mobile = app.mobile_mode;
@@ -2428,7 +2447,7 @@ async fn handle_mobile_mouse(
                                         *selected = vis_idx;
                                         let cmd_id = COMMANDS[cmd_idx].id;
                                         app.mode = InputMode::Normal;
-                                        execute_command(cmd_id, app, writer, term_h).await;
+                                        execute_command(cmd_id, app, writer, term_size).await;
                                         return;
                                     }
                                     row += 1;
@@ -2537,6 +2556,7 @@ async fn handle_mouse(
                 app.pane_tree(),
                 area,
                 app.active_pane,
+                &app.panes,
             );
             if let Some(pane) =
                 orbt_tui::tui::widgets::pane_overview::card_at(&cards, mouse.column, mouse.row)
