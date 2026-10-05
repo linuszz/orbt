@@ -157,22 +157,43 @@ pub enum WinButton {
     Close,
     /// Zoom when the pane is one of several, restore when it is zoomed.
     Zoom,
+    /// Cycle the strip's column width through 1/4, 1/2 and 3/4 of the band.
+    Resize,
 }
 
 /// Hit rects for a pane's window controls, on the top border row, right side.
 /// `zoomed` swaps the zoom glyph for restore. Kept pure so drawing and
 /// click-testing always agree on where the buttons are.
-pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 2] {
+pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 3] {
     // tuios dots metrics: the group hugs the right corner as
-    // [blank][zoom][blank][close][blank][corner]; a control's hit rect spans
-    // its dot plus the blank trailing it.
+    // [blank][resize][blank][zoom][blank][close][blank][corner]; a control's
+    // hit rect spans its dot plus the blank trailing it.
     let at = |dx: u16| Rect {
         x: rect.x + rect.width.saturating_sub(dx),
         y: rect.y,
         width: 2,
         height: 1,
     };
-    [(WinButton::Close, at(3)), (WinButton::Zoom, at(5))]
+    [
+        (WinButton::Close, at(3)),
+        (WinButton::Zoom, at(5)),
+        (WinButton::Resize, at(7)),
+    ]
+}
+
+/// The next column width when the resize control is clicked: 1/4, 1/2 and
+/// 3/4 of the band in rotation, picking the step above the current width and
+/// wrapping past the top. Widths within a cell of a step count as that step,
+/// so a clicked 1/2 advances to 3/4 rather than sticking.
+pub fn next_resize_width(columns: &[StripColumn], column_width: u16, band: Rect) -> u16 {
+    let current = strip_solo_width(columns, column_width, band);
+    let steps = [band.width / 4, band.width / 2, band.width * 3 / 4];
+    steps
+        .into_iter()
+        .filter(|&step| step > current + 1)
+        .min()
+        .unwrap_or(steps[0])
+        .max(20)
 }
 
 /// Scale a rect around its own centre, so freshly opened things bloom into
@@ -1303,7 +1324,7 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
     // ────  ●  ●  ╮. Zoom left, close at the outer corner; restore while
     // zoomed. Dots at rest, circled marks while the pointer is over the
     // group. Too narrow a pane has no room for them.
-    if area.width >= 10 {
+    if area.width >= 14 {
         let zoomed = app.zoomed_pane == Some(pane_id);
         let hovered = app.hover_win_buttons == Some(pane_id);
         let blank = Span::styled(" ", Style::default().bg(Color::Reset));
@@ -1312,12 +1333,14 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
                 WinButton::Close => accent_error(),
                 WinButton::Zoom if zoomed => accent_blocked(),
                 WinButton::Zoom => accent_idle(),
+                WinButton::Resize => accent(),
             };
             let glyph = if hovered {
                 match button {
                     WinButton::Close => "\u{2297}",
                     WinButton::Zoom if zoomed => "\u{2296}",
                     WinButton::Zoom => "\u{2295}",
+                    WinButton::Resize => "\u{2194}",
                 }
             } else {
                 "\u{25cf}"
@@ -1325,13 +1348,15 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
             Span::styled(glyph, Style::default().fg(color).bg(Color::Reset))
         };
         let group = Rect {
-            x: area.x + area.width - 6,
+            x: area.x + area.width - 8,
             y: area.y,
-            width: 5,
+            width: 7,
             height: 1,
         };
         frame.render_widget(
             Paragraph::new(Line::from(vec![
+                blank.clone(),
+                dot(WinButton::Resize),
                 blank.clone(),
                 dot(WinButton::Zoom),
                 blank.clone(),
@@ -1816,9 +1841,14 @@ mod tests {
         let buf = terminal.backend().buffer().clone();
         let leaves = compute_leaf_areas(&app.layout(), area, 0);
         let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
-        let [(.., close), (.., zoom)] = pane_button_rects(*rect);
+        let [(.., close), (.., zoom), (.., resize)] = pane_button_rects(*rect);
         assert_eq!(buf[(close.x, close.y)].symbol(), "\u{2297}", "close glyph");
         assert_eq!(buf[(zoom.x, zoom.y)].symbol(), "\u{2295}", "zoom glyph");
+        assert_eq!(
+            buf[(resize.x, resize.y)].symbol(),
+            "\u{2194}",
+            "resize glyph"
+        );
     }
 
     #[test]
@@ -2033,24 +2063,59 @@ mod tests {
             width: 40,
             height: 12,
         };
-        let [(cb, c), (zb, z)] = pane_button_rects(rect);
+        let [(cb, c), (zb, z), (rb, r)] = pane_button_rects(rect);
         assert_eq!(cb, WinButton::Close);
         assert_eq!(zb, WinButton::Zoom);
+        assert_eq!(rb, WinButton::Resize);
         assert_eq!(c.y, rect.y, "on the border row");
         assert_eq!(z.y, rect.y);
+        assert_eq!(r.y, rect.y);
         let corner = rect.x + rect.width - 1;
         assert!(
-            c.x > z.x,
-            "close is the outermost control, zoom to its left"
+            c.x > z.x && z.x > r.x,
+            "close outermost, then zoom, then resize"
         );
-        assert_eq!(c.width, 2, "a hit spans the dot plus its trailing line");
+        assert_eq!(c.width, 2, "a hit spans the dot plus its trailing blank");
         assert_eq!(
             c.x + c.width,
             corner,
             "the group hugs the corner without touching it"
         );
-        assert_eq!(z.x + z.width, c.x, "one line segment between the controls");
-        assert!(z.x > rect.x + rect.width / 2, "right half of the border");
+        assert_eq!(z.x + z.width, c.x, "one blank between close and zoom");
+        assert_eq!(r.x + r.width, z.x, "one blank between zoom and resize");
+        assert!(r.x > rect.x + rect.width / 2, "right half of the border");
+    }
+
+    #[test]
+    fn resize_cycles_quarter_half_three_quarters_then_wraps() {
+        let band = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+        let columns: Vec<StripColumn> =
+            (1..=2u32).map(|i| StripColumn::single(PaneId(i))).collect();
+
+        // From auto (1/2 with two columns): 1/2 -> 3/4 -> 1/4 -> 1/2.
+        assert_eq!(next_resize_width(&columns, 0, band), 132);
+        assert_eq!(next_resize_width(&columns, 132, band), 44);
+        assert_eq!(next_resize_width(&columns, 44, band), 88);
+
+        // An arbitrary manual width advances to the next step up.
+        assert_eq!(next_resize_width(&columns, 100, band), 132);
+        // A width within a cell of a step counts as that step, so it moves on.
+        assert_eq!(next_resize_width(&columns, 89, band), 132);
+
+        // Narrow band: wrapping past 3/4 lands on a quarter below the
+        // protocol floor, which clamps up to it.
+        let small = Rect {
+            x: 0,
+            y: 0,
+            width: 60,
+            height: 40,
+        };
+        assert_eq!(next_resize_width(&columns, 45, small), 20);
     }
 
     #[test]
@@ -2073,13 +2138,15 @@ mod tests {
         let leaves = compute_leaf_areas(&app.layout(), area, 0);
         let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
         let corner = rect.x + rect.width - 1;
-        let [(.., close), (.., zoom)] = pane_button_rects(*rect);
+        let [(.., close), (.., zoom), (.., resize)] = pane_button_rects(*rect);
+        assert_eq!(buf[(resize.x, rect.y)].symbol(), "\u{25cf}");
         // Blank before the group, between the dots, after the last dot …
         assert_eq!(buf[(zoom.x - 1, rect.y)].symbol(), " ", "lead-in");
         assert_eq!(buf[(zoom.x + 1, rect.y)].symbol(), " ", "between");
         assert_eq!(buf[(close.x + 1, rect.y)].symbol(), " ", "trail");
-        // … the line resumes left of the group and the corner survives.
-        assert_eq!(buf[(zoom.x - 2, rect.y)].symbol(), "\u{2500}");
+        // … the line resumes left of the whole group and the corner survives.
+        assert_eq!(buf[(resize.x - 1, rect.y)].symbol(), " ", "lead blank");
+        assert_eq!(buf[(resize.x - 2, rect.y)].symbol(), "\u{2500}");
         assert_eq!(buf[(corner, rect.y)].symbol(), "\u{256e}");
         assert_eq!(buf[(zoom.x, rect.y)].symbol(), "\u{25cf}");
         assert_eq!(buf[(close.x, rect.y)].symbol(), "\u{25cf}");

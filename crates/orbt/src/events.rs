@@ -3216,7 +3216,7 @@ async fn handle_mouse(
             // pane, the same rule tuios gives its title-bar buttons.
             let mut button_hit = false;
             for (pid, rect) in &areas {
-                if rect.width < 10 {
+                if rect.width < 14 {
                     continue;
                 }
                 for (button, at) in orbt_tui::tui::pane_button_rects(*rect) {
@@ -3245,6 +3245,36 @@ async fn handle_mouse(
                                 }
                                 app.toggle_zoom();
                                 app.needs_resize = true;
+                            }
+                            orbt_tui::tui::WinButton::Resize => {
+                                let band = content_area(term_size, app);
+                                let mut width = None;
+                                if let Some(tab) = app.tabs.get_mut(app.active_tab) {
+                                    if let Some((columns, current)) = tab.pane_tree.as_strip() {
+                                        let next = orbt_tui::tui::next_resize_width(
+                                            columns, current, band,
+                                        );
+                                        tab.pane_tree.set_column_width(next);
+                                        width = Some(next);
+                                    }
+                                }
+                                if let Some(width) = width {
+                                    let _ = writer
+                                        .send(ClientMessage::SetColumnWidth {
+                                            tab_id: app.active_tab_id,
+                                            width,
+                                        })
+                                        .await;
+                                    // The resized columns shift every rect;
+                                    // glide so the clicked pane stays visible.
+                                    let target = orbt_tui::tui::resolved_strip_scroll(
+                                        &app.layout(),
+                                        band,
+                                        app.visual_scroll(),
+                                        *pid,
+                                    );
+                                    app.set_strip_scroll(target);
+                                }
                             }
                         }
                         app.needs_redraw = true;
@@ -3728,11 +3758,16 @@ async fn handle_mouse(
             )
             .iter()
             .find(|(_, rect)| {
-                if rect.width < 10 || mouse.row != rect.y {
+                if rect.width < 14 || mouse.row != rect.y {
                     return false;
                 }
-                let [(.., a), (.., b)] = orbt_tui::tui::pane_button_rects(*rect);
-                let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+                let group = orbt_tui::tui::pane_button_rects(*rect);
+                let lo = group.iter().map(|(_, r)| r.x).min().unwrap_or(0);
+                let hi = group
+                    .iter()
+                    .map(|(_, r)| r.x + r.width - 1)
+                    .max()
+                    .unwrap_or(0);
                 mouse.column >= lo.saturating_sub(1) && mouse.column <= hi + 1
             })
             .map(|(pid, _)| *pid);
