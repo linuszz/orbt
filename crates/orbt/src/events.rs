@@ -3220,7 +3220,7 @@ async fn handle_mouse(
                     continue;
                 }
                 for (button, at) in orbt_tui::tui::pane_button_rects(*rect) {
-                    if mouse.column == at.x && mouse.row == at.y {
+                    if mouse.row == at.y && mouse.column >= at.x && mouse.column < at.x + at.width {
                         match button {
                             orbt_tui::tui::WinButton::Close => {
                                 if app.pane_tree().leaves().len() <= 1 {

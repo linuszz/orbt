@@ -163,10 +163,13 @@ pub enum WinButton {
 /// `zoomed` swaps the zoom glyph for restore. Kept pure so drawing and
 /// click-testing always agree on where the buttons are.
 pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 2] {
+    // tuios dots metrics: the group hugs the right corner as
+    // [line][zoom][line][close][line][corner]; a control's hit rect spans its
+    // dot plus the line segment trailing it.
     let at = |dx: u16| Rect {
         x: rect.x + rect.width.saturating_sub(dx),
         y: rect.y,
-        width: 1,
+        width: 2,
         height: 1,
     };
     [(WinButton::Close, at(3)), (WinButton::Zoom, at(5))]
@@ -1295,14 +1298,23 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
-    // Window controls punched into the top border, macOS order: close, then
-    // zoom (restore while zoomed). Dots at rest, glyphs while the pointer is
-    // over the group (tuios dots style). Reset background so the pad matches
-    // the border row exactly. Too narrow a pane has no room for them.
+    // Window controls riding the top border, tuios dots style: the border
+    // line keeps running through the group and the dots sit on it —
+    // ── ● ── ● ──╮. Zoom left, close at the outer corner; restore while
+    // zoomed. Dots at rest, circled marks while the pointer is over the
+    // group. Too narrow a pane has no room for them.
     if area.width >= 10 {
         let zoomed = app.zoomed_pane == Some(pane_id);
         let hovered = app.hover_win_buttons == Some(pane_id);
-        for (button, at) in pane_button_rects(area) {
+        let segment = Style::default()
+            .fg(border_color)
+            .bg(Color::Reset)
+            .add_modifier(if is_active {
+                Modifier::BOLD
+            } else {
+                Modifier::empty()
+            });
+        let dot = |button: WinButton| {
             let color = match button {
                 WinButton::Close => accent_error(),
                 WinButton::Zoom if zoomed => accent_blocked(),
@@ -1310,31 +1322,31 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
             };
             let glyph = if hovered {
                 match button {
-                    WinButton::Close => "\u{00d7}",
-                    WinButton::Zoom if zoomed => "\u{2212}",
-                    WinButton::Zoom => "+",
+                    WinButton::Close => "\u{2297}",
+                    WinButton::Zoom if zoomed => "\u{2296}",
+                    WinButton::Zoom => "\u{2295}",
                 }
             } else {
                 "\u{25cf}"
             };
-            let pad = Rect {
-                x: at.x.saturating_sub(1),
-                y: at.y,
-                width: 3,
-                height: 1,
-            };
-            frame.render_widget(
-                Block::default().style(Style::default().bg(Color::Reset)),
-                pad,
-            );
-            frame.render_widget(
-                Paragraph::new(Span::styled(
-                    glyph,
-                    Style::default().fg(color).bg(Color::Reset),
-                )),
-                at,
-            );
-        }
+            Span::styled(glyph, Style::default().fg(color).bg(Color::Reset))
+        };
+        let group = Rect {
+            x: area.x + area.width - 6,
+            y: area.y,
+            width: 5,
+            height: 1,
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::styled("\u{2500}", segment),
+                dot(WinButton::Zoom),
+                Span::styled("\u{2500}", segment),
+                dot(WinButton::Close),
+                Span::styled("\u{2500}", segment),
+            ])),
+            group,
+        );
     }
 
     if let Some(pane) = app.panes.get(&pane_id) {
@@ -1812,8 +1824,8 @@ mod tests {
         let leaves = compute_leaf_areas(&app.layout(), area, 0);
         let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
         let [(.., close), (.., zoom)] = pane_button_rects(*rect);
-        assert_eq!(buf[(close.x, close.y)].symbol(), "\u{00d7}", "close glyph");
-        assert_eq!(buf[(zoom.x, zoom.y)].symbol(), "+", "zoom glyph");
+        assert_eq!(buf[(close.x, close.y)].symbol(), "\u{2297}", "close glyph");
+        assert_eq!(buf[(zoom.x, zoom.y)].symbol(), "\u{2295}", "zoom glyph");
     }
 
     #[test]
@@ -1855,7 +1867,7 @@ mod tests {
         let zoom_at = pane_button_rects(*rect)[1].1;
         assert_eq!(
             buf[(zoom_at.x, zoom_at.y)].symbol(),
-            "\u{2212}",
+            "\u{2296}",
             "zoomed means the zoom button offers restore"
         );
     }
@@ -2038,8 +2050,45 @@ mod tests {
             c.x > z.x,
             "close is the outermost control, zoom to its left"
         );
-        assert!(z.x < corner, "never on the corner glyph itself");
-        assert!(c.x > rect.x + rect.width / 2, "right half of the border");
+        assert_eq!(c.width, 2, "a hit spans the dot plus its trailing line");
+        assert_eq!(
+            c.x + c.width,
+            corner,
+            "the group hugs the corner without touching it"
+        );
+        assert_eq!(z.x + z.width, c.x, "one line segment between the controls");
+        assert!(z.x > rect.x + rect.width / 2, "right half of the border");
+    }
+
+    #[test]
+    fn the_border_line_runs_through_the_button_group() {
+        // tuios dots style: the line is never erased behind the controls;
+        // the segments between and around the dots are the border itself.
+        let state = minimal_state();
+        let app = App::from_welcome(&state, 120, 30);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 96,
+            height: 27,
+        };
+        let leaves = compute_leaf_areas(&app.layout(), area, 0);
+        let (_, rect) = leaves.iter().find(|(p, _)| *p == PaneId(1)).unwrap();
+        let corner = rect.x + rect.width - 1;
+        let [(.., close), (.., zoom)] = pane_button_rects(*rect);
+        // ── before the group, between the dots, after the last dot …
+        assert_eq!(buf[(zoom.x - 1, rect.y)].symbol(), "\u{2500}", "lead-in");
+        assert_eq!(buf[(zoom.x + 1, rect.y)].symbol(), "\u{2500}", "between");
+        assert_eq!(buf[(close.x + 1, rect.y)].symbol(), "\u{2500}", "trail");
+        // … and the corner glyph survives the group.
+        assert_eq!(buf[(corner, rect.y)].symbol(), "\u{256e}");
+        assert_eq!(buf[(zoom.x, rect.y)].symbol(), "\u{25cf}");
+        assert_eq!(buf[(close.x, rect.y)].symbol(), "\u{25cf}");
     }
 
     #[test]
