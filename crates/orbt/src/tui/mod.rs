@@ -92,11 +92,17 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 /// configured width and the strip becomes what it is meant to be. The pane is
 /// resized to match, so nothing inside it is squeezed to fit.
 pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
-    if columns.len() != 1 || columns[0].panes.len() != 1 {
-        if column_width == 0 {
-            // Auto: no width chosen, so size a column for two side by side.
-            return (area.width / 2).clamp(20, 400).max(1);
+    if column_width == 0 {
+        if columns.len() <= 1 {
+            // Auto with one column fills the band, however tall it stacks;
+            // treating a stacked column as multi-column halves it for nothing.
+            return area.width.max(1);
         }
+        // Auto with several columns sizes for two side by side; further
+        // columns scroll, which is what the rail and arrows are for.
+        return (area.width / 2).clamp(20, 400).max(1);
+    }
+    if columns.len() != 1 || columns[0].panes.len() != 1 {
         return column_width;
     }
     area.width.max(column_width)
@@ -156,7 +162,7 @@ pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 2] {
         width: 1,
         height: 1,
     };
-    [(WinButton::Close, at(2)), (WinButton::Zoom, at(4))]
+    [(WinButton::Close, at(3)), (WinButton::Zoom, at(5))]
 }
 
 /// Scale a rect around its own centre, so freshly opened things bloom into
@@ -1845,9 +1851,21 @@ mod tests {
         assert_eq!(strip_solo_width(&pair, 0, area), 88);
         // The user's explicit width always wins over auto.
         assert_eq!(strip_solo_width(&pair, 60, area), 60);
-        // A lone pane fills the band whether auto or explicit.
+        // A lone pane fills the band whether auto or explicit, and so does a
+        // single column that stacks panes: stacking splits height, not width.
         let alone = vec![StripColumn::single(PaneId(1))];
         assert_eq!(strip_solo_width(&alone, 0, area), 176);
+        let stacked = vec![StripColumn {
+            panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+        }];
+        assert_eq!(strip_solo_width(&stacked, 0, area), 176);
+        // Three columns auto: half-width each, the third scrolls into view.
+        let trio = vec![
+            StripColumn::single(PaneId(1)),
+            StripColumn::single(PaneId(2)),
+            StripColumn::single(PaneId(3)),
+        ];
+        assert_eq!(strip_solo_width(&trio, 0, area), 88);
         // Auto respects the same clamps as a chosen width.
         let narrow = Rect {
             x: 0,
