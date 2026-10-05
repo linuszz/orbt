@@ -91,21 +91,28 @@ pub const SIDEBAR_COLLAPSED_W: u16 = 5;
 /// leaves `column_width` alone, so opening a second pane brings it back to the
 /// configured width and the strip becomes what it is meant to be. The pane is
 /// resized to match, so nothing inside it is squeezed to fit.
-pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
+/// The width a column actually gets: the user's choice when one exists, auto
+/// otherwise. Every strip geometry function resolves through here so rendering,
+/// hit-testing, scrolling and PTY sizing never disagree.
+pub fn resolve_column_width(columns: &[StripColumn], column_width: u16, area_width: u16) -> u16 {
     if column_width == 0 {
         if columns.len() <= 1 {
             // Auto with one column fills the band, however tall it stacks;
             // treating a stacked column as multi-column halves it for nothing.
-            return area.width.max(1);
+            return area_width.max(1);
         }
         // Auto with several columns sizes for two side by side; further
         // columns scroll, which is what the rail and arrows are for.
-        return (area.width / 2).clamp(20, 400).max(1);
+        return (area_width / 2).clamp(20, 400).max(1);
     }
     if columns.len() != 1 || columns[0].panes.len() != 1 {
         return column_width;
     }
-    area.width.max(column_width)
+    area_width.max(column_width)
+}
+
+pub fn strip_solo_width(columns: &[StripColumn], column_width: u16, area: Rect) -> u16 {
+    resolve_column_width(columns, column_width, area.width)
 }
 /// The overview is a floating panel over the strip, not a replacement for it: it
 /// keeps a margin so the panes stay visible behind it, and it grows with the
@@ -592,7 +599,7 @@ pub fn strip_scroll_target(
     if columns.is_empty() {
         return 0;
     }
-    let width = column_width.max(1) as usize;
+    let width = resolve_column_width(columns, column_width, area.width) as usize;
     let total = width * columns.len();
     let viewport = area.width as usize;
     if total <= viewport {
@@ -632,7 +639,7 @@ pub fn strip_areas_at(
     if columns.is_empty() {
         return Vec::new();
     }
-    let width = column_width.max(1) as usize;
+    let width = resolve_column_width(columns, column_width, area.width) as usize;
     let total = width * columns.len();
     let viewport = area.width as usize;
     let scroll = scroll.min(total.saturating_sub(viewport));
@@ -813,7 +820,7 @@ pub fn strip_scroll_resolve(
     scroll: usize,
     focus: PaneId,
 ) -> usize {
-    let width = column_width.max(1) as usize;
+    let width = resolve_column_width(columns, column_width, area_width) as usize;
     let total = width * columns.len();
     let viewport = area_width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
@@ -843,7 +850,7 @@ pub fn strip_scroll_resolve(
 
 /// The furthest the band can be scrolled.
 pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
-    let total = (column_width.max(1) as usize) * columns.len();
+    let total = (resolve_column_width(columns, column_width, area_width) as usize) * columns.len();
     total.saturating_sub(area_width.max(1) as usize)
 }
 
@@ -915,7 +922,7 @@ pub fn strip_nav(
     let add = centre(add_hit);
     let overview = centre(overview_hit);
 
-    let width = column_width.max(1) as usize;
+    let width = resolve_column_width(columns, column_width, area.width) as usize;
     let total = width * columns.len().max(1);
     let viewport = area.width.max(1) as usize;
     let max_scroll = total.saturating_sub(viewport);
@@ -1833,6 +1840,45 @@ mod tests {
             "\u{2212}",
             "zoomed means the zoom button offers restore"
         );
+    }
+
+    #[test]
+    fn hit_test_rects_resolve_auto_width_the_same_way_rendering_does() {
+        // Regression: a click could not focus a pane because compute_leaf_areas
+        // read the raw auto sentinel (0) and produced zero-width rects while
+        // rendering drew resolved ones.
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 176,
+            height: 40,
+        };
+        let tree = PaneLayout::Strip {
+            columns: vec![
+                StripColumn::single(PaneId(1)),
+                StripColumn::single(PaneId(2)),
+            ],
+            column_width: 0,
+        };
+        let leaves = compute_leaf_areas(&tree, area, 0);
+        assert_eq!(leaves.len(), 2);
+        let (_, first) = &leaves[0];
+        let (_, second) = &leaves[1];
+        assert_eq!(first.width, 88, "auto resolves to half the band");
+        assert_eq!(second.x, first.x + first.width, "second column abuts");
+        assert_eq!(second.width, 88);
+
+        // Stacked single column in auto: full band, hit rects included.
+        let stacked = PaneLayout::Strip {
+            columns: vec![StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+            }],
+            column_width: 0,
+        };
+        let leaves = compute_leaf_areas(&stacked, area, 0);
+        for (_, rect) in &leaves {
+            assert_eq!(rect.width, 176, "a stacked solo column fills the band");
+        }
     }
 
     #[test]
