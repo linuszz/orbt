@@ -598,6 +598,9 @@ pub struct PaneState {
     /// Where the process in this pane is working, as last reported by the
     /// daemon. A pane is identified by this far more often than by its contents.
     pub cwd: String,
+    /// The pane's title as reported by the daemon (OSC 0/2 from the guest),
+    /// shown as the chip at the top right of the border.
+    pub title: String,
 }
 
 const SCROLLBACK_CAP: usize = 10_000;
@@ -608,6 +611,7 @@ impl PaneState {
             parser: VtParser::new(cols, rows),
             scrollback: VecDeque::with_capacity(SCROLLBACK_CAP),
             cwd: String::new(),
+            title: String::new(),
         }
     }
 
@@ -679,9 +683,11 @@ pub struct AppToast {
 }
 
 /// Ticks (16 ms) a strip scroll takes to glide to its target.
-pub const SCROLL_ANIM_TICKS: u64 = 10;
+pub const SCROLL_ANIM_TICKS: u64 = 14;
 /// Ticks the pane overview takes to grow open.
 pub const OVERVIEW_ANIM_TICKS: u64 = 8;
+/// Ticks a freshly opened pane takes to grow into its slot.
+pub const OPEN_ANIM_TICKS: u64 = 10;
 
 /// Cubic ease-in-out: slow start, fast middle, soft landing (the tuios curve).
 pub fn ease_in_out_cubic(t: f32) -> f32 {
@@ -752,6 +758,9 @@ pub struct App {
     pub strip_scroll_anim: Option<Anim>,
     /// Tick the pane overview opened at, so it can grow from nothing.
     pub overview_anim_start: Option<u64>,
+    /// Tick each freshly opened pane appeared at, so it grows into its slot.
+    /// Entries are retired once the glide has run its course.
+    pub pane_open_ticks: std::collections::HashMap<PaneId, u64>,
     pub context_menu: Option<ContextMenu>,
     pub space_name: String,
     pub space_path: String,
@@ -899,6 +908,7 @@ impl App {
                 ps.parser.grid.mouse_sgr = pane.cell_grid.mouse_sgr;
                 ps.parser.grid.resize(cols, rows);
                 ps.cwd = pane.cwd.clone();
+                ps.title = pane.title.clone();
                 panes.insert(pane.id, ps);
             }
 
@@ -951,6 +961,7 @@ impl App {
             strip_scroll: 0,
             strip_scroll_anim: None,
             overview_anim_start: None,
+            pane_open_ticks: std::collections::HashMap::new(),
             context_menu: None,
             space_name: spaces
                 .get(active_space_idx)
@@ -1235,6 +1246,9 @@ impl App {
                 self.overview_anim_start = None;
             }
         }
+        let tick = self.tick_count;
+        self.pane_open_ticks
+            .retain(|_, start| tick < *start + OPEN_ANIM_TICKS);
     }
 
     /// True while any glide is in flight, so the tick keeps running for it.
@@ -1243,6 +1257,7 @@ impl App {
             .as_ref()
             .is_some_and(|a| a.is_running(self.tick_count))
             || self.overview_anim_start.is_some()
+            || !self.pane_open_ticks.is_empty()
     }
 
     /// so walking along a row of panes does not scroll the world out from under
@@ -1466,13 +1481,17 @@ impl App {
                     for pane in &s.panes {
                         if let Some(existing) = self.panes.get_mut(&pane.id) {
                             existing.sync_from_server(&pane.cell_grid);
+                            existing.title = pane.title.clone();
                         } else {
                             let mut ps = PaneState::new(
                                 pane.cell_grid.cols.max(1),
                                 pane.cell_grid.rows.max(1),
                             );
                             ps.sync_from_server(&pane.cell_grid);
+                            ps.title = pane.title.clone();
                             self.panes.insert(pane.id, ps);
+                            // A pane the state never had before grows into place.
+                            self.pane_open_ticks.insert(pane.id, self.tick_count);
                         }
                     }
                     if let Some(active_tab_info) = s.tabs.iter().find(|t| t.id == s.active_tab) {
@@ -1571,6 +1590,7 @@ impl App {
                             PaneState::new(pane.cell_grid.cols.max(1), pane.cell_grid.rows.max(1));
                         ps.sync_from_server(&pane.cell_grid);
                         ps.cwd = pane.cwd.clone();
+                        ps.title = pane.title.clone();
                         self.panes.insert(pane.id, ps);
 
                         if let Some((target, dir)) = self.pending_split.take() {
@@ -1858,7 +1878,7 @@ pub mod tests {
         assert!(app.strip_scroll_anim.is_some());
         assert!(app.has_active_animations());
 
-        app.tick_count = 105; // halfway through a 10-tick glide
+        app.tick_count = 100 + SCROLL_ANIM_TICKS / 2;
         let visual = app.visual_scroll();
         assert!(
             (30..=50).contains(&visual),
@@ -1872,7 +1892,7 @@ pub mod tests {
         assert_eq!(app.strip_scroll_anim, before);
 
         // Completion snaps exactly onto the target and retires the glide.
-        app.tick_count = 110;
+        app.tick_count = 100 + SCROLL_ANIM_TICKS;
         app.finish_animations();
         assert_eq!(app.strip_scroll, 80);
         assert!(app.strip_scroll_anim.is_none());

@@ -19,7 +19,8 @@ pub struct Card {
 
 /// Cards keep the columns' arrangement rather than being packed into a grid, so
 /// the third card is the pane three rights away: a column holding three panes
-/// stays a column.
+/// stays a column. Every column takes the same width regardless of how many
+/// panes it stacks, so a tall column does not squeeze its neighbours.
 pub fn layout(node: &PaneLayout, area: Rect, focus: PaneId) -> Vec<Card> {
     let PaneLayout::Strip { columns, .. } = node else {
         return Vec::new();
@@ -30,7 +31,7 @@ pub fn layout(node: &PaneLayout, area: Rect, focus: PaneId) -> Vec<Card> {
         return Vec::new();
     }
 
-    let weights: Vec<usize> = columns.iter().map(|c| c.panes.len().max(1)).collect();
+    let weights: Vec<usize> = vec![1; columns.len()];
     let total_weight: usize = weights.iter().sum();
     let gap = 1u16;
     let usable = area.width.saturating_sub(gap * (columns.len() as u16 - 1));
@@ -87,22 +88,6 @@ fn open_progress(app: &App) -> f32 {
         .unwrap_or(1.0)
 }
 
-/// Scale a card around its own centre, so the overview blooms out of the strip
-/// rather than snapping in.
-fn grow(rect: Rect, p: f32) -> Rect {
-    if p >= 1.0 {
-        return rect;
-    }
-    let w = (rect.width as f32 * p).round().max(0.0) as u16;
-    let h = (rect.height as f32 * p).round().max(0.0) as u16;
-    Rect {
-        x: rect.x + rect.width.saturating_sub(w) / 2,
-        y: rect.y + rect.height.saturating_sub(h) / 2,
-        width: w,
-        height: h,
-    }
-}
-
 pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     let cards = layout(app.pane_tree(), area, app.active_pane);
     if cards.is_empty() {
@@ -145,7 +130,7 @@ fn render_card(
     total: usize,
     progress: f32,
 ) {
-    let rect = grow(card.rect, progress).intersection(area);
+    let rect = crate::tui::grow_rect(card.rect, progress).intersection(area);
     if rect.width < 3 || rect.height < 3 {
         return;
     }
@@ -286,16 +271,76 @@ mod tests {
             width: 40,
             height: 20,
         };
-        let half = grow(rect, 0.5);
+        let half = crate::tui::grow_rect(rect, 0.5);
         assert_eq!(half.width, 20);
         assert_eq!(half.height, 10);
         // Same centre: 10+20 == 10+20, 10+10 == 10+10.
         assert_eq!(half.x + half.width / 2, rect.x + rect.width / 2);
         assert_eq!(half.y + half.height / 2, rect.y + rect.height / 2);
 
-        let start = grow(rect, 0.0);
+        let start = crate::tui::grow_rect(rect, 0.0);
         assert_eq!(start.width, 0, "a closed overview is a point");
-        assert_eq!(grow(rect, 1.0), rect, "settled means untouched");
+        assert_eq!(
+            crate::tui::grow_rect(rect, 1.0),
+            rect,
+            "settled means untouched"
+        );
+    }
+
+    #[test]
+    fn every_column_gets_the_same_width_regardless_of_stack_height() {
+        // Two columns: one stacks three panes, the other one. They must take
+        // equal width, with the tall column dividing its height instead.
+        let tree = PaneLayout::Strip {
+            columns: vec![
+                StripColumn {
+                    panes: vec![PaneId(1), PaneId(2), PaneId(3)],
+                },
+                StripColumn {
+                    panes: vec![PaneId(4)],
+                },
+            ],
+            column_width: 80,
+        };
+        let area = Rect {
+            x: 0,
+            y: 0,
+            width: 100,
+            height: 30,
+        };
+        let cards = layout(&tree, area, PaneId(1));
+        let col1_w = cards
+            .iter()
+            .find(|c| c.pane == PaneId(1))
+            .unwrap()
+            .rect
+            .width;
+        let col2_w = cards
+            .iter()
+            .find(|c| c.pane == PaneId(4))
+            .unwrap()
+            .rect
+            .width;
+        assert!(
+            col1_w.abs_diff(col2_w) <= 1,
+            "stacked ({col1_w}) and single ({col2_w}) columns match in width"
+        );
+        let tall_h = cards
+            .iter()
+            .find(|c| c.pane == PaneId(1))
+            .unwrap()
+            .rect
+            .height;
+        let flat_h = cards
+            .iter()
+            .find(|c| c.pane == PaneId(4))
+            .unwrap()
+            .rect
+            .height;
+        assert!(
+            flat_h > tall_h * 2,
+            "the single pane gets the column's height"
+        );
     }
 
     #[test]

@@ -134,6 +134,22 @@ pub fn agent_panel_width(term_w: u16, mode: AgentPanelMode) -> u16 {
     }
 }
 
+/// Scale a rect around its own centre, so freshly opened things bloom into
+/// their slot rather than snapping in. `p` below 1 shrinks; 1 returns it whole.
+pub fn grow_rect(rect: Rect, p: f32) -> Rect {
+    if p >= 1.0 {
+        return rect;
+    }
+    let w = (rect.width as f32 * p).round().max(0.0) as u16;
+    let h = (rect.height as f32 * p).round().max(0.0) as u16;
+    Rect {
+        x: rect.x + rect.width.saturating_sub(w) / 2,
+        y: rect.y + rect.height.saturating_sub(h) / 2,
+        width: w,
+        height: h,
+    }
+}
+
 /// Dim every cell outside `keep`, giving a blocking overlay a backdrop without
 /// a separate shade layer. Draw the overlay after calling this.
 pub fn dim_outside(frame: &mut Frame, keep: Rect) {
@@ -1142,6 +1158,30 @@ fn split_area(area: Rect, dir: &SplitDir, ratio: f32) -> (Rect, Rect) {
 }
 
 fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App, col_skip: u16) {
+    // A pane the state just gained blooms into its slot. Clipped panes sit at
+    // the viewport edge where the grow maths fights the clip maths, so they
+    // skip the bloom and draw whole.
+    let open_p = app
+        .pane_open_ticks
+        .get(&pane_id)
+        .and_then(|start| {
+            crate::app::Anim {
+                start_tick: *start,
+                duration: crate::app::OPEN_ANIM_TICKS,
+                from: 0.0,
+                to: 1.0,
+            }
+            .value_at(app.tick_count)
+        })
+        .unwrap_or(1.0);
+    let area = if col_skip == 0 {
+        grow_rect(area, open_p)
+    } else {
+        area
+    };
+    if area.width < 3 || area.height < 3 {
+        return;
+    }
     let is_active = pane_id == app.active_pane;
     let leaves = app.pane_tree().leaves();
     let total = leaves.len();
@@ -1176,7 +1216,42 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
         format!(" 1{cwd_label}")
     };
 
-    let block = Block::default()
+    // Top-right chip, tuios-style: the agent bound to this pane as a status
+    // glyph plus its name, falling back to the pane's own title when no agent
+    // is bound. The pill caps keep it readable against the border line.
+    let mut chip: Vec<Span> = Vec::new();
+    if let Some(agent) = app.agents.iter().find(|a| a.pane_id == Some(pane_id)) {
+        use orbt_protocol::AgentStatus as A;
+        let (glyph, glyph_color) = match agent.status {
+            A::Working => ("\u{25cf}", accent()),
+            A::Blocked => ("\u{25b2}", accent_blocked()),
+            A::Error => ("\u{00d7}", accent_error()),
+            A::Done => ("\u{25a0}", accent_idle()),
+            A::Idle => ("\u{25cb}", fg_muted()),
+        };
+        chip = vec![
+            Span::styled("\u{258f} ", Style::default().fg(border_color)),
+            Span::styled(glyph, Style::default().fg(glyph_color)),
+            Span::styled(
+                format!(" {} ", agent.name),
+                Style::default().fg(border_color),
+            ),
+            Span::styled("\u{2595}", Style::default().fg(border_color)),
+        ];
+    } else if let Some(pane_title) = app
+        .panes
+        .get(&pane_id)
+        .map(|p| p.title.as_str())
+        .filter(|t| !t.is_empty())
+    {
+        chip = vec![Span::styled(
+            format!("\u{258f} {pane_title} \u{2595}"),
+            Style::default().fg(border_color),
+        )];
+    }
+
+    let mut block = Block::default()
+        .border_type(ratatui::widgets::BorderType::Rounded)
         .borders(Borders::ALL)
         .border_style(
             Style::default()
@@ -1193,6 +1268,9 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
                 .fg(if is_active { accent_idle() } else { fg_muted() })
                 .add_modifier(Modifier::BOLD),
         ));
+    if !chip.is_empty() {
+        block = block.title(Line::from(chip).right_aligned());
+    }
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -1623,6 +1701,95 @@ mod tests {
         // Should show Eclipse indicator (circled circle)
         // ◎ = Blocked/Eclipse
         assert!(buffer_contains(&terminal, "\u{25CE}"));
+    }
+
+    #[test]
+    fn pane_top_right_chip_shows_agent_badge() {
+        let mut state = minimal_state();
+        state.agents.push(orbt_protocol::AgentInfo {
+            id: orbt_protocol::AgentId(9),
+            name: "claude-1".to_string(),
+            space_id: SpaceId(1),
+            pane_id: Some(PaneId(1)),
+            model: String::new(),
+            status: orbt_protocol::AgentStatus::Working,
+            detail: None,
+            protocol: orbt_protocol::AgentProtocol::Heuristic,
+            launch_cmd: None,
+        });
+        let app = App::from_welcome(&state, 120, 30);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        assert!(
+            buffer_contains(&terminal, "claude-1"),
+            "the bound agent's name rides the top border"
+        );
+        assert!(
+            buffer_contains(&terminal, "\u{25cf}"),
+            "with its working-state glyph"
+        );
+    }
+
+    #[test]
+    fn pane_top_right_chip_falls_back_to_pane_title() {
+        let mut state = minimal_state();
+        state.spaces[0].panes[0].title = "vim — main.rs".to_string();
+        let app = App::from_welcome(&state, 120, 30);
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+
+        assert!(
+            buffer_contains(&terminal, "vim"),
+            "an untitled pane shows nothing, a titled one shows its title"
+        );
+    }
+
+    #[test]
+    fn a_freshly_opened_pane_grows_into_its_slot() {
+        let state = minimal_state();
+        let mut app = App::from_welcome(&state, 120, 30);
+        app.pane_open_ticks.insert(PaneId(1), 0);
+        app.tick_count = 0;
+
+        // At the very start the pane is a point: nothing to draw.
+        let backend = TestBackend::new(120, 30);
+        let mut terminal = Terminal::new(backend).unwrap();
+        terminal.draw(|f| render(f, &app)).unwrap();
+        // The pane's side walls grow taller as it blooms, so their count
+        // measures the frame's size. Corners cannot: there are always two.
+        let side_walls = |buf: &ratatui::buffer::Buffer| {
+            let mut n = 0;
+            for y in 1..30u16 {
+                for x in 24..120u16 {
+                    if buf[(x, y)].symbol() == "\u{2502}" {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        };
+        let buf = terminal.backend().buffer().clone();
+        assert_eq!(side_walls(&buf), 0, "a pane at progress 0 has no frame yet");
+
+        // Halfway through, the frame exists but is smaller than its slot.
+        app.tick_count = crate::app::OPEN_ANIM_TICKS / 2;
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let half_cells = side_walls(&buf);
+        assert!(half_cells > 0, "mid-bloom the frame is drawn");
+
+        // Settled, the pane fills its slot: more frame than mid-bloom.
+        app.tick_count = crate::app::OPEN_ANIM_TICKS;
+        terminal.draw(|f| render(f, &app)).unwrap();
+        let buf = terminal.backend().buffer().clone();
+        let full_cells = side_walls(&buf);
+        assert!(
+            full_cells > half_cells,
+            "settled frame ({full_cells}) beats mid-bloom ({half_cells})"
+        );
     }
 
     #[test]
