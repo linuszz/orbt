@@ -3162,19 +3162,6 @@ async fn handle_mouse(
             }
 
             let pane_area = content_area(term_size, app);
-            if app.zoomed_pane.is_none() {
-                if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
-                    app.pane_tree(),
-                    pane_area,
-                    mouse.column,
-                    mouse.row,
-                    app.active_pane,
-                ) {
-                    app.drag_split = Some((first_pane, second_pane, dir, -1.0));
-                    app.selection = None;
-                    return;
-                }
-            }
             let areas =
                 orbt_tui::tui::compute_leaf_areas(&app.layout(), pane_area, app.visual_scroll());
             // Window controls on the border row win over anything inside the
@@ -3223,6 +3210,21 @@ async fn handle_mouse(
             }
             if button_hit {
                 return;
+            }
+            // A lower pane's top border IS the split line, so this check comes
+            // after the buttons: a click on a control must not arm a drag.
+            if app.zoomed_pane.is_none() {
+                if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
+                    app.pane_tree(),
+                    pane_area,
+                    mouse.column,
+                    mouse.row,
+                    app.active_pane,
+                ) {
+                    app.drag_split = Some((first_pane, second_pane, dir, -1.0));
+                    app.selection = None;
+                    return;
+                }
             }
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
@@ -3653,8 +3655,9 @@ async fn handle_mouse(
                         if rect.width < 10 || mouse.row != rect.y {
                             return false;
                         }
-                        let [(.., close), (.., zoom)] = orbt_tui::tui::pane_button_rects(*rect);
-                        mouse.column >= close.x.saturating_sub(1) && mouse.column <= zoom.x + 1
+                        let [(.., a), (.., b)] = orbt_tui::tui::pane_button_rects(*rect);
+                        let (lo, hi) = (a.x.min(b.x), a.x.max(b.x));
+                        mouse.column >= lo.saturating_sub(1) && mouse.column <= hi + 1
                     })
                     .map(|(pid, _)| *pid);
             if app.hover_win_buttons != hovered {

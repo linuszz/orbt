@@ -152,7 +152,7 @@ pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 2] {
         width: 1,
         height: 1,
     };
-    [(WinButton::Close, at(4)), (WinButton::Zoom, at(2))]
+    [(WinButton::Close, at(2)), (WinButton::Zoom, at(4))]
 }
 
 /// Scale a rect around its own centre, so freshly opened things bloom into
@@ -1838,7 +1838,10 @@ mod tests {
         assert_eq!(c.y, rect.y, "on the border row");
         assert_eq!(z.y, rect.y);
         let corner = rect.x + rect.width - 1;
-        assert!(c.x < z.x, "close left of zoom, macOS order");
+        assert!(
+            c.x > z.x,
+            "close is the outermost control, zoom to its left"
+        );
         assert!(z.x < corner, "never on the corner glyph itself");
         assert!(c.x > rect.x + rect.width / 2, "right half of the border");
     }
