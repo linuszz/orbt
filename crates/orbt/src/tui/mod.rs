@@ -992,21 +992,22 @@ pub fn strip_scroll_step(
     target.unwrap_or(scroll).min(max)
 }
 
-/// Where the edge tabs sit: a three-cell tab centred on the band's left edge
-/// when columns hide off-screen that way, likewise on the right. Single
-/// source for drawing and for hit-testing.
+/// Where the edge tabs sit: one three-cell notch per pane whose frame forms
+/// the band's left edge (when columns hide off-screen that way) and likewise
+/// on the right. A stacked edge column therefore gets one tab per pane, each
+/// centred on that pane's own span, instead of a single glyph landed on the
+/// divider between stacked panes. Single source for drawing and hit-testing.
 pub fn strip_edge_tabs(
     columns: &[StripColumn],
     column_width: u16,
     area: Rect,
     scroll: usize,
-) -> (Option<Rect>, Option<Rect>) {
+) -> (Vec<Rect>, Vec<Rect>) {
     if area.height < 3 || area.width < 4 {
-        return (None, None);
+        return (Vec::new(), Vec::new());
     }
     let max = strip_scroll_max(columns, column_width, area.width);
     let scroll = scroll.min(max);
-    let y = area.y + area.height / 2 - 1;
     // Anchor to frame lines that actually exist: a column clipped to a sliver
     // narrower than a box is not drawn at all, so a tab pinned to the band
     // edge would float one cell past the last frame.
@@ -1015,25 +1016,40 @@ pub fn strip_edge_tabs(
         .filter(|(_, rect, _)| rect.width >= 3 && rect.height >= 3)
         .map(|(_, rect, _)| rect)
         .collect();
+    let notch = |x: u16, rect: &Rect| Rect {
+        x,
+        y: rect.y + (rect.height - 3) / 2,
+        width: 1,
+        height: 3,
+    };
     let left = if scroll > 0 {
-        drawn.first().map(|rect| Rect {
-            x: rect.x,
-            y,
-            width: 1,
-            height: 3,
-        })
+        drawn
+            .first()
+            .map(|first| {
+                drawn
+                    .iter()
+                    .filter(|rect| rect.x == first.x)
+                    .map(|rect| notch(first.x, rect))
+                    .collect()
+            })
+            .unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
     let right = if scroll < max {
-        drawn.last().map(|rect| Rect {
-            x: rect.x + rect.width - 1,
-            y,
-            width: 1,
-            height: 3,
-        })
+        drawn
+            .last()
+            .map(|last| last.x + last.width - 1)
+            .map(|edge_x| {
+                drawn
+                    .iter()
+                    .filter(|rect| rect.x + rect.width - 1 == edge_x)
+                    .map(|rect| notch(edge_x, rect))
+                    .collect()
+            })
+            .unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
     (left, right)
 }
@@ -1055,16 +1071,12 @@ pub fn strip_edge_tab_at(
         return None;
     };
     let (left, right) = strip_edge_tabs(columns, *column_width, area, rendered_scroll);
-    let on = |r: Rect| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height;
-    if let Some(l) = left {
-        if on(l) {
-            return Some(false);
-        }
+    let on = |r: &Rect| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height;
+    if left.iter().any(on) {
+        return Some(false);
     }
-    if let Some(r) = right {
-        if on(r) {
-            return Some(true);
-        }
+    if right.iter().any(on) {
+        return Some(true);
     }
     None
 }
@@ -1409,13 +1421,12 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             // The glyphs take the frame's own colour, so a dim border gets a
             // dim tab and the active pane's accent frame gets an accent one;
             // the chevron only adds weight to stay readable as the handle.
-            let (left_tab, right_tab) = strip_edge_tabs(columns, *column_width, area, scroll);
+            let (left_tabs, right_tabs) = strip_edge_tabs(columns, *column_width, area, scroll);
             let buf = frame.buffer_mut();
-            for (tab, chevron) in [(left_tab, '◂'), (right_tab, '▸')] {
-                if let Some(tab) = tab {
-                    let mid = tab.y + 1;
+            for (tabs, chevron) in [(left_tabs, '◂'), (right_tabs, '▸')] {
+                for tab in tabs {
                     frame_glyph(buf, tab.x, tab.y, '│', false);
-                    frame_glyph(buf, tab.x, mid, chevron, true);
+                    frame_glyph(buf, tab.x, tab.y + 1, chevron, true);
                     frame_glyph(buf, tab.x, tab.y + 2, '│', false);
                 }
             }
@@ -2409,18 +2420,17 @@ mod tests {
         };
         // Four 60-wide columns: max scroll 120.
         let (l, r) = strip_edge_tabs(&columns, 0, area, 0);
-        assert!(l.is_none(), "nothing left of scroll 0");
-        assert_eq!(r.unwrap().x, 24 + 120 - 1);
+        assert!(l.is_empty(), "nothing left of scroll 0");
+        assert_eq!(r[0].x, 24 + 120 - 1);
         let (l, r) = strip_edge_tabs(&columns, 0, area, 60);
-        assert_eq!(l.unwrap().x, 24);
-        assert!(r.is_some());
+        assert_eq!(l[0].x, 24);
+        assert!(!r.is_empty());
         let (l, r) = strip_edge_tabs(&columns, 0, area, 120);
-        assert!(l.is_some());
-        assert!(r.is_none(), "at max: nothing further right");
+        assert!(!l.is_empty());
+        assert!(r.is_empty(), "at max: nothing further right");
         // Tabs are three cells tall, centred on the band.
         let (_, r) = strip_edge_tabs(&columns, 0, area, 0);
-        let tab = r.unwrap();
-        assert_eq!((tab.y, tab.height), (1 + 21 / 2 - 1, 3));
+        assert_eq!((r[0].y, r[0].height), (1 + 21 / 2 - 1, 3));
     }
 
     #[test]
@@ -2437,10 +2447,47 @@ mod tests {
         };
         let (_, r) = strip_edge_tabs(&columns, 0, area, 0);
         assert_eq!(
-            r.unwrap().x,
+            r[0].x,
             24 + 114 - 1,
             "tab hugs the second column's frame, not the sliver cell"
         );
+    }
+
+    #[test]
+    fn stacked_edge_column_gets_one_tab_per_pane_clear_of_the_divider() {
+        // Leftmost column stacks two panes; three more columns follow so both
+        // sides scroll. Band is 120 wide and 20 tall, columns are 60 wide.
+        let mut columns: Vec<StripColumn> =
+            (3..=5u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        columns.insert(
+            0,
+            StripColumn {
+                panes: vec![PaneId(1), PaneId(2)],
+                width: 0.0,
+            },
+        );
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 120,
+            height: 20,
+        };
+        // Scroll 30 keeps the 60-wide stacked column half visible; at 60 it
+        // would be fully off-screen and the left tabs would rightly anchor to
+        // the next (single-pane) column.
+        let (l, _r) = strip_edge_tabs(&columns, 0, area, 30);
+        assert_eq!(l.len(), 2, "one tab per stacked pane");
+        let divider_row = area.y + 10; // halves of 20: the seam sits at row 11
+        for tab in &l {
+            let rows: Vec<u16> = (tab.y..tab.y + 3).collect();
+            assert!(
+                !rows.contains(&divider_row),
+                "tab rows {rows:?} must not straddle the seam at {divider_row}"
+            );
+        }
+        // Each tab is centred on its own pane's span, not the band's middle.
+        assert!(l[0].y < divider_row);
+        assert!(l[1].y > divider_row);
     }
 
     #[test]
@@ -2453,7 +2500,7 @@ mod tests {
             width: 120,
             height: 2,
         };
-        assert_eq!(strip_edge_tabs(&columns, 0, flat, 30), (None, None));
+        assert_eq!(strip_edge_tabs(&columns, 0, flat, 30), (vec![], vec![]));
     }
 
     #[test]
