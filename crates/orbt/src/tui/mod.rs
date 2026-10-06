@@ -1007,9 +1007,17 @@ pub fn strip_edge_tabs(
     let max = strip_scroll_max(columns, column_width, area.width);
     let scroll = scroll.min(max);
     let y = area.y + area.height / 2 - 1;
+    // Anchor to frame lines that actually exist: a column clipped to a sliver
+    // narrower than a box is not drawn at all, so a tab pinned to the band
+    // edge would float one cell past the last frame.
+    let drawn: Vec<Rect> = strip_areas_at(columns, column_width, area, scroll)
+        .into_iter()
+        .filter(|(_, rect, _)| rect.width >= 3 && rect.height >= 3)
+        .map(|(_, rect, _)| rect)
+        .collect();
     let left = if scroll > 0 {
-        Some(Rect {
-            x: area.x,
+        drawn.first().map(|rect| Rect {
+            x: rect.x,
             y,
             width: 1,
             height: 3,
@@ -1018,8 +1026,8 @@ pub fn strip_edge_tabs(
         None
     };
     let right = if scroll < max {
-        Some(Rect {
-            x: area.x + area.width - 1,
+        drawn.last().map(|rect| Rect {
+            x: rect.x + rect.width - 1,
             y,
             width: 1,
             height: 3,
@@ -2395,6 +2403,26 @@ mod tests {
         let (_, r) = strip_edge_tabs(&columns, 0, area, 0);
         let tab = r.unwrap();
         assert_eq!((tab.y, tab.height), (1 + 21 / 2 - 1, 3));
+    }
+
+    #[test]
+    fn edge_tabs_anchor_to_drawn_frames_not_slivers() {
+        // Three auto columns on a 115-wide band are 57 wide each; at scroll 0
+        // the third column shows as a one-cell sliver that is never drawn.
+        let columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 115,
+            height: 21,
+        };
+        let (_, r) = strip_edge_tabs(&columns, 0, area, 0);
+        assert_eq!(
+            r.unwrap().x,
+            24 + 114 - 1,
+            "tab hugs the second column's frame, not the sliver cell"
+        );
     }
 
     #[test]
