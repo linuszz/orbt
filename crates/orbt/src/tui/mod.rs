@@ -1329,6 +1329,21 @@ pub fn find_split_at_cursor(
     }
 }
 
+/// Paint a frame glyph that keeps the underlying border's own colour, so the
+/// mark blends into whatever line it sits on; `bold` is for the chevron.
+fn frame_glyph(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: char, bold: bool) {
+    let a = *buf.area();
+    if x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height {
+        let Some(cell) = buf.cell_mut((x, y)) else {
+            return;
+        };
+        cell.set_char(ch);
+        if bold {
+            cell.set_style(cell.style().add_modifier(ratatui::style::Modifier::BOLD));
+        }
+    }
+}
+
 /// Paint one cell of the drop indicator, clipped to the buffer.
 fn drop_mark(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: Option<char>) {
     let a = *buf.area();
@@ -1391,14 +1406,17 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                 }
             }
             // Edge tabs: a notch on the frame where columns hide off-screen.
+            // The glyphs take the frame's own colour, so a dim border gets a
+            // dim tab and the active pane's accent frame gets an accent one;
+            // the chevron only adds weight to stay readable as the handle.
             let (left_tab, right_tab) = strip_edge_tabs(columns, *column_width, area, scroll);
             let buf = frame.buffer_mut();
             for (tab, chevron) in [(left_tab, '◂'), (right_tab, '▸')] {
                 if let Some(tab) = tab {
                     let mid = tab.y + 1;
-                    drop_mark(buf, tab.x, tab.y, Some('│'));
-                    drop_mark(buf, tab.x, mid, Some(chevron));
-                    drop_mark(buf, tab.x, tab.y + 2, Some('│'));
+                    frame_glyph(buf, tab.x, tab.y, '│', false);
+                    frame_glyph(buf, tab.x, mid, chevron, true);
+                    frame_glyph(buf, tab.x, tab.y + 2, '│', false);
                 }
             }
             render_strip_nav(frame, columns, *column_width, area, scroll);
