@@ -2100,17 +2100,8 @@ async fn handle_mobile_mouse(
                                 && mouse.row < rect.y + rect.height
                             {
                                 if app.active_pane != *pid {
+                                    app.converge_strip_scroll_to_screen(pane_area);
                                     app.active_pane = *pid;
-                                    // A tapped pane is on screen, so tapping
-                                    // must not scroll: freeze the viewport at
-                                    // what is drawn right now.
-                                    let target = orbt_tui::tui::resolved_strip_scroll(
-                                        &app.layout(),
-                                        pane_area,
-                                        app.visual_scroll(),
-                                        *pid,
-                                    );
-                                    app.set_strip_scroll(target);
                                     let _ = writer
                                         .send(ClientMessage::FocusPane {
                                             tab_id: app.active_tab_id,
@@ -3352,14 +3343,8 @@ async fn handle_mouse(
                         && mouse.column > rect.x
                         && mouse.column + 1 < rect.x + rect.width;
                     if on_title {
+                        app.converge_strip_scroll_to_screen(pane_area);
                         app.active_pane = *pid;
-                        let target = orbt_tui::tui::resolved_strip_scroll(
-                            &app.layout(),
-                            pane_area,
-                            app.visual_scroll(),
-                            *pid,
-                        );
-                        app.set_strip_scroll(target);
                         let _ = writer
                             .send(ClientMessage::FocusPane {
                                 tab_id: app.active_tab_id,
@@ -3380,17 +3365,10 @@ async fn handle_mouse(
                     && mouse.row >= rect.y
                     && mouse.row < rect.y + rect.height
                 {
+                    // Freeze the viewport on what is drawn, then focus: the
+                    // strip must not move because of a click.
+                    app.converge_strip_scroll_to_screen(pane_area);
                     app.active_pane = *pid;
-                    // A clicked pane is on screen by definition, so clicking
-                    // must not scroll: converge the glide state to what is
-                    // currently drawn, cancelling any in-flight scroll.
-                    let target = orbt_tui::tui::resolved_strip_scroll(
-                        &app.layout(),
-                        pane_area,
-                        app.visual_scroll(),
-                        *pid,
-                    );
-                    app.set_strip_scroll(target);
                     let _ = writer
                         .send(ClientMessage::FocusPane {
                             tab_id: app.active_tab_id,

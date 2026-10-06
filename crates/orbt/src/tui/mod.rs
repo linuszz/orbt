@@ -1209,7 +1209,9 @@ pub fn find_split_at_cursor(
 fn drop_mark(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: Option<char>) {
     let a = *buf.area();
     if x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height {
-        let Some(cell) = buf.cell_mut((x, y)) else { return };
+        let Some(cell) = buf.cell_mut((x, y)) else {
+            return;
+        };
         if let Some(ch) = ch {
             cell.set_char(ch);
         }

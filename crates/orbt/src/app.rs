@@ -1217,6 +1217,26 @@ impl App {
         self.strip_scroll
     }
 
+    /// Bake what is currently drawn into the strip scroll state. Rendering
+    /// resolves the offset against the focus on the fly, so state and screen
+    /// drift apart whenever something moves the focus without touching the
+    /// scroll (a split pulls its new pane into view, a daemon echo refocuses).
+    /// Pointer gestures must call this BEFORE changing `active_pane`: the
+    /// viewport freezes on exactly what the user sees, never on a re-resolve
+    /// against the new focus.
+    pub fn converge_strip_scroll_to_screen(&mut self, area: ratatui::layout::Rect) {
+        if !self.pane_tree().is_strip() {
+            return;
+        }
+        let target = crate::tui::resolved_strip_scroll(
+            &self.layout(),
+            area,
+            self.visual_scroll(),
+            self.active_pane,
+        );
+        self.set_strip_scroll(target);
+    }
+
     /// Glide the strip to `target`. A repeated call with the same target keeps
     /// the glide already in flight; a new target re-aims from wherever the
     /// viewport has visibly reached, so chained moves stay smooth.
