@@ -476,6 +476,15 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
         width: area.width,
         height: area.height.saturating_sub(2),
     };
+    // render_pane_tree draws the strip's navigation row just below the area it
+    // is given; hand it a pane area one row shorter so the bar lands inside the
+    // content region instead of overwriting the mobile tab bar.
+    let pane_area = Rect {
+        height: content_area
+            .height
+            .saturating_sub(strip_nav_height(&app.layout())),
+        ..content_area
+    };
 
     widgets::mobile_nav::render_header(frame, header_area, app);
     widgets::mobile_nav::render_nav(frame, nav_area, app);
@@ -483,7 +492,7 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
     match app.mobile_view {
         MobileView::Terminal => {
             frame.render_widget(Clear, content_area);
-            render_pane_tree(frame, content_area, &app.layout(), app);
+            render_pane_tree(frame, pane_area, &app.layout(), app);
 
             // Overlay: command palette, eclipse modal, settings, etc.
             if matches!(app.mode, InputMode::CommandPalette { .. }) {
@@ -532,7 +541,7 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
         MobileView::Actions => {
             // PTY underneath (same as Terminal view), palette floats on top.
             // render_mobile dims the full content_area uniformly (no sidebar offset).
-            render_pane_tree(frame, content_area, &app.layout(), app);
+            render_pane_tree(frame, pane_area, &app.layout(), app);
             if app.settings_open {
                 widgets::settings_modal::render(frame, content_area, app);
             } else {
@@ -1753,6 +1762,35 @@ mod tests {
     }
 
     #[test]
+    fn mobile_keeps_its_tab_bar_clear_of_the_strip_nav() {
+        // The strip nav draws one row below the pane area it is given; on
+        // mobile that used to be the mobile tab bar's row, clobbering it.
+        let mut state = minimal_state();
+        state.spaces[0].tabs[0].layout = PaneLayout::Strip {
+            columns: vec![StripColumn::single(PaneId(1))],
+            column_width: 0,
+        };
+        let app = App::from_welcome(&state, 120, 24);
+        assert!(app.mobile_mode, "120x24 is a mobile-sized screen");
+        let backend = TestBackend::new(120, 24);
+        let mut terminal = Terminal::new(backend).unwrap();
+        // The event loop dispatches to render_mobile directly at this size.
+        terminal.draw(|f| render_mobile(f, &app)).unwrap();
+        let lines = buffer_lines(&terminal);
+
+        let bottom = &lines[23];
+        assert!(
+            bottom.contains("TERMINAL"),
+            "mobile tab bar survives on the bottom row: {bottom}"
+        );
+        let strip_row = &lines[22];
+        assert!(
+            strip_row.contains('\u{25c0}') || strip_row.contains('\u{2502}'),
+            "strip nav takes the row above it: {strip_row}"
+        );
+    }
+
+    #[test]
     fn render_ultra_wide_layout_160x40() {
         let state = minimal_state();
         let app = App::from_welcome(&state, 160, 40);
@@ -2130,6 +2168,17 @@ mod tests {
         assert_eq!(z.x + z.width, c.x, "one blank between close and zoom");
         assert_eq!(r.x + r.width, z.x, "one blank between zoom and resize");
         assert!(r.x > rect.x + rect.width / 2, "right half of the border");
+    }
+
+    #[test]
+    fn three_auto_columns_on_a_120_band_are_halves() {
+        // Mobile-width sanity: no overrides means every column takes half
+        // the band, two fit on screen and the third scrolls.
+        let columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        let widths = column_widths(&columns, 0, 120);
+        assert_eq!(widths, vec![60, 60, 60]);
+        assert_eq!(strip_scroll_max(&columns, 0, 120), 60);
     }
 
     #[test]
