@@ -19,7 +19,7 @@ use orbt_protocol::ServerEvent;
 
 pub use orbt_protocol::default_socket_path;
 
-fn lock_file_path() -> std::path::PathBuf {
+pub(crate) fn lock_file_path() -> std::path::PathBuf {
     default_socket_path().with_extension("lock")
 }
 

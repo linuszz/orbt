@@ -92,9 +92,73 @@ async fn connect_local_with_autostart(
     );
 }
 
+/// `orbt kill` — terminate the local daemon and delete its saved session, so
+/// the next start is clean no matter how the daemon felt about restoring.
+async fn kill_daemon() -> Result<()> {
+    let socket_path = orbt_protocol::default_socket_path();
+    let lock_path = daemon::lock_file_path();
+
+    #[cfg(unix)]
+    {
+        let pid: Option<u32> = std::fs::read_to_string(&lock_path)
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        if let Some(pid) = pid {
+            let alive = unsafe { libc::kill(pid as libc::pid_t, 0) } == 0;
+            // The lock file outlives its daemon on a crash; only signal a
+            // process that is actually this binary so a recycled PID from
+            // something unrelated is never signalled.
+            let ours = std::fs::read_to_string(format!("/proc/{pid}/cmdline"))
+                .map(|c| c.contains("orbt"))
+                .unwrap_or(false);
+            if alive && ours {
+                unsafe { libc::kill(pid as libc::pid_t, libc::SIGTERM) };
+                // SIGTERM lets the daemon save-then-exit; the snapshot it
+                // writes during that shutdown must be deleted only after the
+                // process is really gone, or the save would resurrect it.
+                let mut gone = false;
+                for _ in 0..30 {
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    if unsafe { libc::kill(pid as libc::pid_t, 0) } != 0 {
+                        gone = true;
+                        break;
+                    }
+                }
+                if !gone {
+                    eprintln!("orbt: daemon (PID {pid}) ignored SIGTERM, sending SIGKILL");
+                    unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
+                    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                }
+                println!("orbtd (PID {pid}) terminated");
+            } else if alive {
+                println!("orbt: lock file PID {pid} is not an orbt daemon, leaving it alone");
+            } else {
+                println!("orbt: no daemon running (stale lock cleaned up)");
+            }
+        } else {
+            println!("orbt: no daemon running");
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        println!("orbt: cannot signal the daemon on this platform; cleaning state only");
+    }
+
+    daemon::snapshot::delete();
+    let _ = std::fs::remove_file(&socket_path);
+    let _ = std::fs::remove_file(&lock_path);
+    println!("orbt: session snapshot deleted; next start is clean");
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
+
+    // `orbit kill` — stop the daemon and wipe its saved session.
+    if args.get(1).map(|s| s.as_str()) == Some("kill") {
+        return kill_daemon().await;
+    }
 
     // `orbit daemon` — run the daemon in the foreground (used by servers and
     // by the auto-start path above when it forks itself).
