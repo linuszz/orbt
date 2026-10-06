@@ -1214,7 +1214,16 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             columns,
             column_width,
         } => {
-            let scroll = resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane);
+            // While a glide is in flight the eased position is the truth:
+            // resolving it against the focus would snap every intermediate
+            // frame to the glide's destination and the scroll would look
+            // instant. With no glide running, resolve so a focus change that
+            // arrived without a scroll command still pulls its pane on screen.
+            let scroll = if app.strip_scroll_anim.is_some() {
+                app.visual_scroll()
+            } else {
+                resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane)
+            };
             let areas = strip_areas_at(columns, *column_width, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
