@@ -2023,6 +2023,176 @@ async fn handle_agent_detail_modal_mouse(
     }
 }
 
+/// A tap while the overview panel is open: a card focuses its pane and closes
+/// the panel. With `dismiss_outside` (mobile touch) a tap anywhere else closes
+/// the panel too; the desktop keeps it up for keyboard browsing.
+async fn handle_overview_tap(
+    mouse: crossterm::event::MouseEvent,
+    app: &mut App,
+    writer: &IpcWriter,
+    band: ratatui::layout::Rect,
+    dismiss_outside: bool,
+) {
+    if mouse.kind == crossterm::event::MouseEventKind::Down(MouseButton::Left) {
+        let area = orbt_tui::tui::overview_area(
+            band,
+            orbt_tui::tui::overview_tallest_column(app.pane_tree()),
+        );
+        let cards = orbt_tui::tui::widgets::pane_overview::layout(
+            app.pane_tree(),
+            area,
+            app.active_pane,
+            &app.panes,
+        );
+        if let Some(pane) =
+            orbt_tui::tui::widgets::pane_overview::card_at(&cards, mouse.column, mouse.row)
+        {
+            app.active_pane = pane;
+            app.show_overview = false;
+            app.overview_anim_start = None;
+            app.needs_redraw = true;
+            let _ = writer
+                .send(ClientMessage::FocusPane {
+                    tab_id: app.active_tab_id,
+                    pane_id: pane,
+                })
+                .await;
+        } else if dismiss_outside {
+            app.show_overview = false;
+            app.overview_anim_start = None;
+            app.needs_redraw = true;
+        }
+    }
+}
+
+/// Tap on the strip navigation bar: the arrows cycle the focus (the same as
+/// the palette's left and right, wrapping at the ends), the overview and add
+/// buttons do what they say, and a tap on the rail jumps the viewport there.
+/// Shared by the desktop and mobile mouse handlers so the bar behaves the same
+/// on both. Returns true when the tap was consumed by the bar.
+async fn handle_strip_nav_tap(
+    mouse: crossterm::event::MouseEvent,
+    app: &mut App,
+    writer: &IpcWriter,
+    band: ratatui::layout::Rect,
+) -> bool {
+    if app.zoomed_pane.is_some() {
+        return false;
+    }
+    if let orbt_protocol::PaneLayout::Strip {
+        columns,
+        column_width,
+    } = app.pane_tree()
+    {
+        let columns_clone = columns.clone();
+        let (effective, count, firsts) = (
+            *column_width,
+            columns.len(),
+            columns
+                .iter()
+                .filter_map(|c| c.panes.first().copied())
+                .collect::<Vec<_>>(),
+        );
+        let focus = app.active_pane;
+        let scroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), band, app);
+        let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
+        let on = |r: ratatui::layout::Rect| {
+            mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row == r.y
+        };
+        let max_scroll = orbt_tui::tui::strip_scroll_max(columns, effective, band.width);
+        let tab_id = app.active_tab_id;
+
+        // The arrows cycle, the same as the palette's left and right and
+        // the f key, so every control that changes pane agrees on what
+        // "next" is and wraps at the ends.
+        let step = if on(nav.back_hit) && nav.can_back {
+            Some(true)
+        } else if on(nav.forward_hit) && nav.can_forward {
+            Some(false)
+        } else {
+            None
+        };
+        if let Some(backwards) = step {
+            let current = app.active_pane;
+            if let Some(target) =
+                orbt_tui::app::App::cycle_pane_from(app.pane_tree(), current, backwards)
+            {
+                app.active_pane = target;
+                let target_scroll = orbt_tui::tui::resolved_strip_scroll(
+                    &app.layout(),
+                    band,
+                    app.visual_scroll(),
+                    app.active_pane,
+                );
+                app.set_strip_scroll(target_scroll);
+                app.needs_redraw = true;
+                let _ = writer
+                    .send(ClientMessage::FocusPane {
+                        tab_id,
+                        pane_id: target,
+                    })
+                    .await;
+            }
+            return true;
+        }
+
+        if on(nav.overview_hit) {
+            app.show_overview = true;
+            app.overview_anim_start = Some(app.tick_count);
+            app.needs_redraw = true;
+            return true;
+        }
+
+        if on(nav.add_hit) {
+            let _ = writer
+                .send(ClientMessage::SplitPane {
+                    tab_id,
+                    pane_id: focus,
+                    direction: orbt_protocol::SplitDir::Horizontal,
+                })
+                .await;
+            app.needs_redraw = true;
+            return true;
+        }
+
+        // Anywhere on the rail jumps to the pane under the cursor.
+        if mouse.row == nav.track.y
+            && mouse.column >= nav.track.x
+            && mouse.column < nav.track.x + nav.track.width
+        {
+            let cell = (mouse.column - nav.track.x) as usize;
+            let widths = orbt_tui::tui::column_widths(columns, effective, band.width);
+            let total: usize = widths.iter().map(|&width| width as usize).sum();
+            let band_pos = cell * total / nav.track.width.max(1) as usize;
+            app.set_strip_scroll(band_pos.min(max_scroll));
+            // Bring the focused pane along only if the jump left it off
+            // screen, so the border still marks something you can see.
+            // Columns differ in width, so the rail offset maps to a
+            // column through their cumulative widths, not a divisor.
+            let mut acc = 0usize;
+            let index = widths
+                .iter()
+                .position(|&width| {
+                    acc += width as usize;
+                    band_pos < acc
+                })
+                .unwrap_or(count.saturating_sub(1));
+            if let Some(target) = firsts.get(index).copied() {
+                app.active_pane = target;
+                let _ = writer
+                    .send(ClientMessage::FocusPane {
+                        tab_id,
+                        pane_id: target,
+                    })
+                    .await;
+            }
+            app.needs_redraw = true;
+            return true;
+        }
+    }
+    false
+}
+
 async fn handle_mobile_mouse(
     mouse: crossterm::event::MouseEvent,
     app: &mut App,
@@ -2044,6 +2214,20 @@ async fn handle_mobile_mouse(
     }
     if app.launch_modal.is_some() {
         handle_launch_modal_mouse(mouse, app, writer, term_size).await;
+        return;
+    }
+
+    // The overview floats over the terminal view; while it is open every tap
+    // belongs to it, and a tap outside the cards dismisses it.
+    if app.show_overview {
+        handle_overview_tap(
+            mouse,
+            app,
+            writer,
+            compute_pane_area(term_w, term_h, app),
+            true,
+        )
+        .await;
         return;
     }
 
@@ -2100,17 +2284,25 @@ async fn handle_mobile_mouse(
                     MobileView::Terminal => {
                         // Same area the renderer laid the panes out in.
                         let pane_area = compute_pane_area(term_w, term_h, app);
-                        // Edge tabs, the same affordance as the desktop frame.
+                        // Edge tabs, the same affordance as the desktop frame,
+                        // with the target inflated one cell: a frame glyph is a
+                        // poor fingertip target at its drawn size.
                         let rscroll =
                             orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app);
-                        if let Some(forward) = orbt_tui::tui::strip_edge_tab_at(
+                        if let Some(forward) = orbt_tui::tui::strip_edge_tab_at_padded(
                             app.pane_tree(),
                             pane_area,
                             rscroll,
                             mouse.column,
                             mouse.row,
+                            1,
                         ) {
                             step_strip_viewport(app, pane_area, forward);
+                            return;
+                        }
+                        // Strip navigation bar: the same controls the desktop
+                        // exposes, hit-tested against the mobile band.
+                        if handle_strip_nav_tap(mouse, app, writer, pane_area).await {
                             return;
                         }
                         // Check for pane click — same logic as desktop but with mobile area.
@@ -2605,33 +2797,7 @@ async fn handle_mouse(
     }
 
     if app.show_overview {
-        if mouse.kind == crossterm::event::MouseEventKind::Down(MouseButton::Left) {
-            let band = content_area(term_size, app);
-            let area = orbt_tui::tui::overview_area(
-                band,
-                orbt_tui::tui::overview_tallest_column(app.pane_tree()),
-            );
-            let cards = orbt_tui::tui::widgets::pane_overview::layout(
-                app.pane_tree(),
-                area,
-                app.active_pane,
-                &app.panes,
-            );
-            if let Some(pane) =
-                orbt_tui::tui::widgets::pane_overview::card_at(&cards, mouse.column, mouse.row)
-            {
-                app.active_pane = pane;
-                app.show_overview = false;
-                app.overview_anim_start = None;
-                app.needs_redraw = true;
-                let _ = writer
-                    .send(ClientMessage::FocusPane {
-                        tab_id: app.active_tab_id,
-                        pane_id: pane,
-                    })
-                    .await;
-            }
-        }
+        handle_overview_tap(mouse, app, writer, content_area(term_size, app), false).await;
         return;
     }
 
@@ -2844,121 +3010,8 @@ async fn handle_mouse(
 
             // One geometry for both drawing and clicking: the bar's own rects,
             // so a button cannot end up somewhere other than where it is drawn.
-            if app.zoomed_pane.is_none() {
-                let band = content_area(term_size, app);
-                if let orbt_protocol::PaneLayout::Strip {
-                    columns,
-                    column_width,
-                } = app.pane_tree()
-                {
-                    let columns_clone = columns.clone();
-                    let (effective, count, firsts) = (
-                        *column_width,
-                        columns.len(),
-                        columns
-                            .iter()
-                            .filter_map(|c| c.panes.first().copied())
-                            .collect::<Vec<_>>(),
-                    );
-                    let focus = app.active_pane;
-                    let scroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), band, app);
-                    let _ = focus;
-                    let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
-                    let on = |r: ratatui::layout::Rect| {
-                        mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row == r.y
-                    };
-                    let max_scroll =
-                        orbt_tui::tui::strip_scroll_max(columns, effective, band.width);
-                    let tab_id = app.active_tab_id;
-
-                    // The arrows cycle, the same as the palette's left and right and
-                    // the f key, so every control that changes pane agrees on what
-                    // "next" is and wraps at the ends.
-                    let step = if on(nav.back_hit) && nav.can_back {
-                        Some(true)
-                    } else if on(nav.forward_hit) && nav.can_forward {
-                        Some(false)
-                    } else {
-                        None
-                    };
-                    if let Some(backwards) = step {
-                        let current = app.active_pane;
-                        if let Some(target) =
-                            orbt_tui::app::App::cycle_pane_from(app.pane_tree(), current, backwards)
-                        {
-                            app.active_pane = target;
-                            let target_scroll = orbt_tui::tui::resolved_strip_scroll(
-                                &app.layout(),
-                                band,
-                                app.visual_scroll(),
-                                app.active_pane,
-                            );
-                            app.set_strip_scroll(target_scroll);
-                            app.needs_redraw = true;
-                            let _ = writer
-                                .send(ClientMessage::FocusPane {
-                                    tab_id,
-                                    pane_id: target,
-                                })
-                                .await;
-                        }
-                        return;
-                    }
-
-                    if on(nav.overview_hit) {
-                        app.show_overview = true;
-                        app.overview_anim_start = Some(app.tick_count);
-                        app.needs_redraw = true;
-                        return;
-                    }
-
-                    if on(nav.add_hit) {
-                        let _ = writer
-                            .send(ClientMessage::SplitPane {
-                                tab_id,
-                                pane_id: focus,
-                                direction: orbt_protocol::SplitDir::Horizontal,
-                            })
-                            .await;
-                        app.needs_redraw = true;
-                        return;
-                    }
-
-                    // Anywhere on the rail jumps to the pane under the cursor.
-                    if mouse.row == nav.track.y
-                        && mouse.column >= nav.track.x
-                        && mouse.column < nav.track.x + nav.track.width
-                    {
-                        let cell = (mouse.column - nav.track.x) as usize;
-                        let widths = orbt_tui::tui::column_widths(columns, effective, band.width);
-                        let total: usize = widths.iter().map(|&width| width as usize).sum();
-                        let band_pos = cell * total / nav.track.width.max(1) as usize;
-                        app.set_strip_scroll(band_pos.min(max_scroll));
-                        // Bring the focused pane along only if the jump left it off
-                        // screen, so the border still marks something you can see.
-                        // Columns differ in width, so the rail offset maps to a
-                        // column through their cumulative widths, not a divisor.
-                        let mut acc = 0usize;
-                        let index = widths
-                            .iter()
-                            .position(|&width| {
-                                acc += width as usize;
-                                band_pos < acc
-                            })
-                            .unwrap_or(count.saturating_sub(1));
-                        if let Some(target) = firsts.get(index).copied() {
-                            app.active_pane = target;
-                            let _ = writer
-                                .send(ClientMessage::FocusPane {
-                                    tab_id,
-                                    pane_id: target,
-                                })
-                                .await;
-                        }
-                        app.needs_redraw = true;
-                        return;
-                    }
-                }
+            if handle_strip_nav_tap(mouse, app, writer, content_area(term_size, app)).await {
+                return;
             }
 
             if !app.sidebar_visible && mouse.column < SIDEBAR_COLLAPSED_W && mouse.row > 0 {

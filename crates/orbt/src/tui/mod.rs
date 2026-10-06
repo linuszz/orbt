@@ -494,6 +494,15 @@ pub fn render_mobile(frame: &mut Frame, app: &App) {
             frame.render_widget(Clear, content_area);
             render_pane_tree(frame, pane_area, &app.layout(), app);
 
+            // The strip overview floats over the panes, same as the desktop.
+            if app.show_overview {
+                widgets::pane_overview::render(
+                    frame,
+                    overview_area(pane_area, overview_tallest_column(app.pane_tree())),
+                    app,
+                );
+            }
+
             // Overlay: command palette, eclipse modal, settings, etc.
             if matches!(app.mode, InputMode::CommandPalette { .. }) {
                 widgets::command_palette::render(frame, content_area, app);
@@ -1063,6 +1072,20 @@ pub fn strip_edge_tab_at(
     col: u16,
     row: u16,
 ) -> Option<bool> {
+    strip_edge_tab_at_padded(node, area, rendered_scroll, col, row, 0)
+}
+
+/// `strip_edge_tab_at` with every tab's target inflated by `pad` cells in each
+/// direction, clamped to the band: a one-cell frame glyph is a fine mouse
+/// target but a poor fingertip target, so the mobile handler passes a pad.
+pub fn strip_edge_tab_at_padded(
+    node: &PaneLayout,
+    area: Rect,
+    rendered_scroll: usize,
+    col: u16,
+    row: u16,
+    pad: u16,
+) -> Option<bool> {
     let PaneLayout::Strip {
         columns,
         column_width,
@@ -1071,7 +1094,15 @@ pub fn strip_edge_tab_at(
         return None;
     };
     let (left, right) = strip_edge_tabs(columns, *column_width, area, rendered_scroll);
-    let on = |r: &Rect| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height;
+    let on = |r: &Rect| {
+        let x0 = r.x.saturating_sub(pad);
+        let y0 = r.y.saturating_sub(pad);
+        let x1 = (r.x + r.width).saturating_add(pad).min(area.x + area.width);
+        let y1 = (r.y + r.height)
+            .saturating_add(pad)
+            .min(area.y + area.height);
+        col >= x0 && col < x1 && row >= y0 && row < y1
+    };
     if left.iter().any(on) {
         return Some(false);
     }
@@ -2488,6 +2519,53 @@ mod tests {
         // Each tab is centred on its own pane's span, not the band's middle.
         assert!(l[0].y < divider_row);
         assert!(l[1].y > divider_row);
+    }
+
+    #[test]
+    fn padded_edge_tab_hit_widens_the_target_not_the_glyph() {
+        let columns: Vec<StripColumn> =
+            (1..=4u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        let area = Rect {
+            x: 0,
+            y: 1,
+            width: 60,
+            height: 17,
+        };
+        // 30-wide columns, max scroll 60; scroll 0 shows a right tab only.
+        let (_, right) = strip_edge_tabs(&columns, 0, area, 0);
+        let tab = right[0];
+        // One cell inside the pane past the frame: a miss without padding.
+        let near_col = tab.x - 1;
+        let mid_row = tab.y + 1;
+        assert_eq!(
+            strip_edge_tab_at(
+                &PaneLayout::Strip {
+                    columns: columns.clone(),
+                    column_width: 0,
+                },
+                area,
+                0,
+                near_col,
+                mid_row
+            ),
+            None,
+            "unpadded hit test keeps the one-cell target"
+        );
+        assert_eq!(
+            strip_edge_tab_at_padded(
+                &PaneLayout::Strip {
+                    columns,
+                    column_width: 0,
+                },
+                area,
+                0,
+                near_col,
+                mid_row,
+                1,
+            ),
+            Some(true),
+            "padded hit test forgives a one-cell fingertip miss"
+        );
     }
 
     #[test]
