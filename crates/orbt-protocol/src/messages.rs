@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 7; // was 6; StripColumn gains a per-column width override
+pub const PROTOCOL_VERSION: u32 = 8; // was 7; column width overrides are band fractions, not cells
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -90,13 +90,13 @@ pub enum ClientMessage {
         second_pane: crate::PaneId,
         ratio: f32,
     },
-    /// Set the width of the strip column holding `pane`, in cells; 0 clears
-    /// the override so the column follows the strip default. Ignored on split
-    /// trees, which use `ResizeSplit` ratios instead.
+    /// Set the width of the strip column holding `pane` as a fraction of the
+    /// band; 0.0 clears the override so the column follows the strip default.
+    /// Ignored on split trees, which use `ResizeSplit` ratios instead.
     SetColumnWidth {
         tab_id: crate::TabId,
         pane: crate::PaneId,
-        width: u16,
+        width: f32,
     },
     /// Move `pane` one slot left (towards index 0) or right in its tab.
     SwapPane {

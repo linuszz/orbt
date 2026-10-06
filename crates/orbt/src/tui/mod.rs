@@ -123,10 +123,10 @@ pub fn column_widths(columns: &[StripColumn], column_width: u16, area_width: u16
     columns
         .iter()
         .map(|column| {
-            if column.width == 0 {
+            if column.width == 0.0 {
                 default
             } else {
-                column.width
+                (area_width as f32 * column.width).round().max(1.0) as u16
             }
         })
         .collect()
@@ -200,27 +200,26 @@ pub fn pane_button_rects(rect: Rect) -> [(WinButton, Rect); 3] {
 
 /// The next column width when the resize control is clicked: 1/4, 1/2 and
 /// 3/4 of the band in rotation, picking the step above the current width and
-/// wrapping past the top. Widths within a cell of a step count as that step,
-/// so a clicked 1/2 advances to 3/4 rather than sticking.
+/// wrapping past the top. Widths within half a cell of a step count as that
+/// step, so a clicked 1/2 advances to 3/4 rather than sticking.
 pub fn next_resize_width(
     columns: &[StripColumn],
     column_width: u16,
     band: Rect,
     pane: PaneId,
-) -> u16 {
+) -> f32 {
+    const STEPS: [f32; 3] = [0.25, 0.5, 0.75];
     let widths = column_widths(columns, column_width, band.width);
     let current = columns
         .iter()
         .position(|column| column.panes.contains(&pane))
-        .map(|index| widths[index])
-        .unwrap_or(band.width / 2);
-    let steps = [band.width / 4, band.width / 2, band.width * 3 / 4];
-    steps
+        .map(|index| widths[index] as f32 / band.width.max(1) as f32)
+        .unwrap_or(0.5);
+    let half_cell = 0.5 / band.width.max(1) as f32;
+    STEPS
         .into_iter()
-        .filter(|&step| step > current + 1)
-        .min()
-        .unwrap_or(steps[0])
-        .max(20)
+        .find(|&step| step > current + half_cell)
+        .unwrap_or(STEPS[0])
 }
 
 /// Scale a rect around its own centre, so freshly opened things bloom into
@@ -2050,7 +2049,7 @@ mod tests {
         let stacked = PaneLayout::Strip {
             columns: vec![StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             }],
             column_width: 0,
         };
@@ -2082,7 +2081,7 @@ mod tests {
         assert_eq!(strip_solo_width(&alone, 0, area), 176);
         let stacked = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
-            width: 0,
+            width: 0.0,
         }];
         assert_eq!(strip_solo_width(&stacked, 0, area), 176);
         // Three columns auto: half-width each, the third scrolls into view.
@@ -2139,7 +2138,7 @@ mod tests {
         // inherit the auto default (half band with several columns).
         let mut columns: Vec<StripColumn> =
             (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
-        columns[1].width = 132;
+        columns[1].width = 0.75;
         let area = Rect {
             x: 0,
             y: 0,
@@ -2215,15 +2214,15 @@ mod tests {
             unreachable!()
         };
         let next = next_resize_width(columns, *column_width, band, PaneId(2));
-        assert_eq!(next, 132);
+        assert_eq!(next, 0.75);
         assert!(tree.set_column_width(PaneId(2), next));
 
         let PaneLayout::Strip { columns, .. } = &tree else {
             unreachable!()
         };
-        assert_eq!(columns[1].width, 132, "the clicked column took the step");
-        assert_eq!(columns[0].width, 0, "its neighbours stay on the default");
-        assert_eq!(columns[2].width, 0);
+        assert_eq!(columns[1].width, 0.75, "the clicked column took the step");
+        assert_eq!(columns[0].width, 0.0, "its neighbours stay on the default");
+        assert_eq!(columns[2].width, 0.0);
 
         // And cycling column 1 starts from its own auto width, untouched by
         // column 2's override.
@@ -2236,7 +2235,7 @@ mod tests {
         };
         assert_eq!(
             next_resize_width(columns, *column_width, band, PaneId(1)),
-            132,
+            0.75,
             "column 1 cycles from half band, not from column 2's width"
         );
     }
@@ -2253,24 +2252,25 @@ mod tests {
             (1..=2u32).map(|i| StripColumn::single(PaneId(i))).collect();
 
         // From auto (1/2 with two columns): 1/2 -> 3/4 -> 1/4 -> 1/2.
-        assert_eq!(next_resize_width(&columns, 0, band, PaneId(1)), 132);
-        assert_eq!(next_resize_width(&columns, 132, band, PaneId(1)), 44);
-        assert_eq!(next_resize_width(&columns, 44, band, PaneId(1)), 88);
+        // The strip default is absolute cells, so 132/176 reads as 3/4.
+        assert_eq!(next_resize_width(&columns, 0, band, PaneId(1)), 0.75);
+        assert_eq!(next_resize_width(&columns, 132, band, PaneId(1)), 0.25);
+        assert_eq!(next_resize_width(&columns, 44, band, PaneId(1)), 0.5);
 
         // An arbitrary manual width advances to the next step up.
-        assert_eq!(next_resize_width(&columns, 100, band, PaneId(1)), 132);
-        // A width within a cell of a step counts as that step, so it moves on.
-        assert_eq!(next_resize_width(&columns, 89, band, PaneId(1)), 132);
+        assert_eq!(next_resize_width(&columns, 100, band, PaneId(1)), 0.75);
+        // A width within half a cell of a step counts as that step.
+        assert_eq!(next_resize_width(&columns, 89, band, PaneId(1)), 0.75);
 
-        // Narrow band: wrapping past 3/4 lands on a quarter below the
-        // protocol floor, which clamps up to it.
+        // A narrow band cycles the same fractions; the cell count follows
+        // the band when the fraction is applied.
         let small = Rect {
             x: 0,
             y: 0,
             width: 60,
             height: 40,
         };
-        assert_eq!(next_resize_width(&columns, 45, small, PaneId(1)), 20);
+        assert_eq!(next_resize_width(&columns, 45, small, PaneId(1)), 0.25);
     }
 
     #[test]
@@ -3020,7 +3020,7 @@ mod tests {
         let columns = vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
             StripColumn::single(PaneId(4)),
@@ -3176,7 +3176,7 @@ mod tests {
 
         let stacked = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2)],
-            width: 0,
+            width: 0.0,
         }];
         assert_eq!(
             strip_solo_width(&stacked, 80, area),
@@ -3288,7 +3288,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 21);
         let c = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
-            width: 0,
+            width: 0.0,
         }];
         let areas = strip_areas_at(&c, W, area, 0);
         assert_eq!(areas.len(), 3, "every pane in the column gets a rect");
@@ -3316,7 +3316,7 @@ mod tests {
         let area = Rect::new(0, 0, 100, 10);
         let c = vec![StripColumn {
             panes: vec![PaneId(1), PaneId(2), PaneId(3)],
-            width: 0,
+            width: 0.0,
         }];
         let areas = strip_areas_at(&c, W, area, 0);
         let rects: Vec<Rect> = areas.iter().map(|(_, r, _)| *r).collect();

@@ -255,19 +255,19 @@ pub enum PaneLayout {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StripColumn {
     pub panes: Vec<PaneId>,
-    /// This column's own width in cells; 0 inherits the strip's
-    /// `column_width` (which is itself 0 for auto). Per-column widths are the
-    /// niri model: the resize control and width nudges act on one column,
-    /// not the whole strip.
+    /// This column's own width as a fraction of the band (0.25 = a quarter of
+    /// the screen); 0.0 inherits the strip's `column_width` (which is itself
+    /// 0 for auto). Proportions follow the niri model and survive terminal
+    /// resizes, which absolute cell counts cannot.
     #[serde(default)]
-    pub width: u16,
+    pub width: f32,
 }
 
 impl StripColumn {
     pub fn single(pane: PaneId) -> Self {
         Self {
             panes: vec![pane],
-            width: 0,
+            width: 0.0,
         }
     }
 }
@@ -554,15 +554,19 @@ impl PaneLayout {
         }
     }
 
-    /// Set the width of the column holding `pane`, in cells. 0 clears the
-    /// override so the column follows the strip default again.
-    pub fn set_column_width(&mut self, pane: PaneId, width: u16) -> bool {
+    /// Set the width of the column holding `pane` as a fraction of the band.
+    /// 0.0 clears the override so the column follows the strip default again.
+    pub fn set_column_width(&mut self, pane: PaneId, width: f32) -> bool {
         match self {
             PaneLayout::Strip { columns, .. } => {
                 let Some(column) = columns.iter_mut().find(|c| c.panes.contains(&pane)) else {
                     return false;
                 };
-                column.width = if width == 0 { 0 } else { width.clamp(20, 400) };
+                column.width = if width == 0.0 {
+                    0.0
+                } else {
+                    width.clamp(0.1, 1.0)
+                };
                 true
             }
             _ => false,
@@ -687,15 +691,19 @@ fn strip_column_width_clamps_and_ignores_split_trees() {
         column_width: 80,
     };
     let column_width = |layout: &PaneLayout| layout.as_strip().map(|(columns, _)| columns[0].width);
-    assert!(strip.set_column_width(PaneId(1), 120));
-    assert_eq!(column_width(&strip), Some(120));
-    assert!(strip.set_column_width(PaneId(1), 5));
-    assert_eq!(column_width(&strip), Some(20), "clamped up to the minimum");
-    assert!(strip.set_column_width(PaneId(1), 9999));
+    assert!(strip.set_column_width(PaneId(1), 0.5));
+    assert_eq!(column_width(&strip), Some(0.5));
+    assert!(strip.set_column_width(PaneId(1), 0.01));
     assert_eq!(
         column_width(&strip),
-        Some(400),
-        "clamped down to the maximum"
+        Some(0.1),
+        "clamped up to the minimum fraction"
+    );
+    assert!(strip.set_column_width(PaneId(1), 9.0));
+    assert_eq!(
+        column_width(&strip),
+        Some(1.0),
+        "clamped down to the full band"
     );
 
     let mut tree = PaneLayout::Split {
@@ -704,7 +712,7 @@ fn strip_column_width_clamps_and_ignores_split_trees() {
         second: Box::new(PaneLayout::Leaf(PaneId(2))),
         ratio: 0.5,
     };
-    assert!(!tree.set_column_width(PaneId(1), 100));
+    assert!(!tree.set_column_width(PaneId(1), 0.5));
     assert!(!tree.swap_pane(PaneId(1), true));
 }
 
@@ -748,7 +756,7 @@ fn strip_vertical_navigation_walks_within_a_column() {
         columns: vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
         ],
@@ -776,7 +784,7 @@ fn strip_horizontal_navigation_crosses_columns() {
         columns: vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
         ],
@@ -800,7 +808,7 @@ fn strip_removing_the_last_pane_of_a_column_drops_it() {
         columns: vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
         ],
@@ -885,7 +893,7 @@ fn converting_a_strip_back_to_a_tree_restores_the_columns() {
         columns: vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
         ],
@@ -914,7 +922,7 @@ fn converting_to_the_layout_already_in_use_changes_nothing() {
         columns: vec![
             StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             },
             StripColumn::single(PaneId(3)),
         ],

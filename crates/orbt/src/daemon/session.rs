@@ -485,7 +485,7 @@ impl SessionState {
             .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
     }
 
-    pub async fn set_column_width(&self, tab_id: TabId, pane: PaneId, width: u16) {
+    pub async fn set_column_width(&self, tab_id: TabId, pane: PaneId, width: f32) {
         {
             let mut tabs = self.tabs.write().await;
             if let Some(tab) = tabs.get_mut(&tab_id) {

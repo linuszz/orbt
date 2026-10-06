@@ -344,11 +344,11 @@ mod tests {
             columns: vec![
                 StripColumn {
                     panes: vec![PaneId(1), PaneId(2), PaneId(3)],
-                    width: 0,
+                    width: 0.0,
                 },
                 StripColumn {
                     panes: vec![PaneId(4)],
-                    width: 0,
+                    width: 0.0,
                 },
             ],
             column_width: 80,
@@ -408,7 +408,7 @@ mod tests {
         let tree = PaneLayout::Strip {
             columns: vec![StripColumn {
                 panes: vec![PaneId(1), PaneId(2)],
-                width: 0,
+                width: 0.0,
             }],
             column_width: 0,
         };
@@ -445,11 +445,11 @@ mod tests {
             columns: vec![
                 StripColumn {
                     panes: vec![PaneId(1)],
-                    width: 0,
+                    width: 0.0,
                 },
                 StripColumn {
                     panes: vec![PaneId(2)],
-                    width: 0,
+                    width: 0.0,
                 },
             ],
             column_width: 0,
@@ -479,7 +479,7 @@ mod tests {
             columns: vec![
                 StripColumn {
                     panes: vec![PaneId(1), PaneId(2)],
-                    width: 0,
+                    width: 0.0,
                 },
                 StripColumn::single(PaneId(3)),
             ],

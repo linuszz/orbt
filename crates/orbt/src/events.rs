@@ -169,22 +169,23 @@ async fn execute_command(
                 .await;
         }
         "wider_column" | "narrower_column" => {
-            let step: i16 = if id == "wider_column" { 8 } else { -8 };
+            let step: f32 = if id == "wider_column" { 0.05 } else { -0.05 };
             let mut width = None;
             let band = content_area(term_size, app);
             let focus = app.active_pane;
             if let Some(tab) = app.tabs.get_mut(app.active_tab) {
                 if let Some((columns, current)) = tab.pane_tree.as_strip() {
-                    // Nudge the focused column only: widths are per-column, and
-                    // an auto column resolves to what is on screen first, so
-                    // the first step moves from what the user sees.
+                    // Nudge the focused column only: widths are per-column
+                    // band fractions, and an auto column resolves to what is
+                    // on screen first, so the first step moves from what the
+                    // user sees.
                     let widths = orbt_tui::tui::column_widths(columns, current, band.width);
                     let base = columns
                         .iter()
                         .position(|column| column.panes.contains(&focus))
-                        .map(|index| widths[index])
-                        .unwrap_or(band.width / 2);
-                    let next = ((base as i16 + step).clamp(20, 400)) as u16;
+                        .map(|index| widths[index] as f32 / band.width.max(1) as f32)
+                        .unwrap_or(0.5);
+                    let next = (base + step).clamp(0.1, 1.0);
                     tab.pane_tree.set_column_width(focus, next);
                     width = Some(next);
                 }
@@ -3494,10 +3495,12 @@ async fn handle_mouse(
                         .map(|(_, rect, skip)| rect.x as i32 - skip as i32),
                         _ => None,
                     };
-                    let width = left_edge
-                        .map(|left| ((mouse.column as i32 - left + 1).clamp(20, 400)) as f32);
+                    let width = left_edge.map(|left| {
+                        ((mouse.column as i32 - left + 1) as f32 / pane_area.width.max(1) as f32)
+                            .clamp(0.1, 1.0)
+                    });
                     if let Some(width) = width {
-                        if (width - last).abs() >= 1.0 {
+                        if (width - last).abs() >= 0.005 {
                             app.drag_split = Some((first_pane, second_pane, dir, width));
                             Some((first_pane, second_pane, width))
                         } else {
@@ -3531,7 +3534,7 @@ async fn handle_mouse(
                 if is_strip {
                     // The drag moves one column's right edge; set that
                     // column's own width from where the edge now sits.
-                    let width = value as u16;
+                    let width = value;
                     if let Some(tab) = app.tabs.get_mut(app.active_tab) {
                         tab.pane_tree.set_column_width(first_pane, width);
                     }
