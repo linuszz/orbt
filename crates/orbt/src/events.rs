@@ -2258,6 +2258,8 @@ async fn handle_mobile_mouse(
                         MobileView::Actions
                     }
                 };
+                app.drag_pane = None;
+                app.drop_target = None;
                 app.mobile_view = view;
                 if view == MobileView::Actions {
                     app.mode = InputMode::CommandPalette {
@@ -2305,12 +2307,38 @@ async fn handle_mobile_mouse(
                         if handle_strip_nav_tap(mouse, app, writer, pane_area).await {
                             return;
                         }
-                        // Check for pane click — same logic as desktop but with mobile area.
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
                             pane_area,
                             orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                         );
+                        // Title-bar press arms a reorder drag, the same gesture
+                        // as the desktop: the pane takes focus immediately and
+                        // click vs drag is decided by whether a Drag event
+                        // arrives before the release.
+                        if app.zoomed_pane.is_none() && app.pane_tree().is_strip() {
+                            let armed = leaves.iter().find(|(_, rect)| {
+                                mouse.row == rect.y
+                                    && mouse.column > rect.x
+                                    && mouse.column + 1 < rect.x + rect.width
+                            });
+                            if let Some((pid, _)) = armed {
+                                let pid = *pid;
+                                app.converge_strip_scroll_to_screen(pane_area);
+                                app.active_pane = pid;
+                                let _ = writer
+                                    .send(ClientMessage::FocusPane {
+                                        tab_id: app.active_tab_id,
+                                        pane_id: pid,
+                                    })
+                                    .await;
+                                app.drag_pane = Some(pid);
+                                app.drop_target = None;
+                                app.needs_redraw = true;
+                                return;
+                            }
+                        }
+                        // Check for pane click — same logic as desktop but with mobile area.
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
                                 && mouse.column < rect.x + rect.width
@@ -2707,6 +2735,72 @@ async fn handle_mobile_mouse(
                         }
                         app.needs_redraw = true;
                     }
+                }
+            }
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            // Live drop target while a pane is airborne: left/right third of
+            // the pane under the finger reorders the strip, the middle third
+            // stacks onto it. The indicator is drawn by render_pane_tree.
+            if app.mobile_view == MobileView::Terminal {
+                if let Some(dragged) = app.drag_pane {
+                    let pane_area = compute_pane_area(term_w, term_h, app);
+                    let areas = orbt_tui::tui::compute_leaf_areas(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                    );
+                    let mut next = None;
+                    for (pid, rect) in &areas {
+                        if *pid == dragged {
+                            continue;
+                        }
+                        if mouse.column >= rect.x
+                            && mouse.column < rect.x + rect.width
+                            && mouse.row >= rect.y
+                            && mouse.row < rect.y + rect.height
+                        {
+                            let third = rect.width / 3;
+                            let pos = if mouse.column < rect.x + third {
+                                orbt_protocol::PaneDropPos::Before
+                            } else if mouse.column >= rect.x + rect.width.saturating_sub(third) {
+                                orbt_protocol::PaneDropPos::After
+                            } else {
+                                orbt_protocol::PaneDropPos::Stack
+                            };
+                            next = Some((*pid, pos));
+                            break;
+                        }
+                    }
+                    if app.drop_target != next {
+                        app.drop_target = next;
+                        app.needs_redraw = true;
+                    }
+                }
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            // Release with a live drop target executes the move; release
+            // without one was a click, which already focused at the press.
+            if let Some(dragged) = app.drag_pane.take() {
+                if let Some((target, position)) = app.drop_target.take() {
+                    let _ = writer
+                        .send(ClientMessage::MovePane {
+                            tab_id: app.active_tab_id,
+                            pane: dragged,
+                            target,
+                            position,
+                        })
+                        .await;
+                    // Focus follows the moved pane.
+                    app.active_pane = dragged;
+                    let _ = writer
+                        .send(ClientMessage::FocusPane {
+                            tab_id: app.active_tab_id,
+                            pane_id: dragged,
+                        })
+                        .await;
+                    app.needs_redraw = true;
                 }
             }
         }
