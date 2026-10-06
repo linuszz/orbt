@@ -945,6 +945,119 @@ pub fn strip_scroll_resolve(
 }
 
 /// The furthest the band can be scrolled.
+/// The offset the strip is drawn at right now: the eased glide position while
+/// one is in flight, otherwise the stored offset resolved against the focus.
+/// Hit-testing must use exactly this, or clicks land where nothing is drawn.
+pub fn rendered_strip_scroll(node: &PaneLayout, area: Rect, app: &App) -> usize {
+    if app.strip_scroll_anim.is_some() {
+        app.visual_scroll()
+    } else {
+        resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane)
+    }
+}
+
+/// Left edge of every column, in band cells.
+fn column_left_edges(columns: &[StripColumn], column_width: u16, area_width: u16) -> Vec<usize> {
+    let mut edges = Vec::with_capacity(columns.len());
+    let mut x = 0usize;
+    for w in column_widths(columns, column_width, area_width) {
+        edges.push(x);
+        x += w as usize;
+    }
+    edges
+}
+
+/// The column boundary one step past `scroll`: the smallest left edge strictly
+/// beyond it going forward, the largest strictly before it going back, so a
+/// half-visible column first snaps flush before the viewport walks on.
+/// Clamped to the scrollable range; a no-op at the ends.
+pub fn strip_scroll_step(
+    columns: &[StripColumn],
+    column_width: u16,
+    area_width: u16,
+    scroll: usize,
+    forward: bool,
+) -> usize {
+    let max = strip_scroll_max(columns, column_width, area_width);
+    let scroll = scroll.min(max);
+    let edges = column_left_edges(columns, column_width, area_width);
+    let target = if forward {
+        edges.iter().copied().filter(|&e| e > scroll).min()
+    } else {
+        edges.iter().copied().filter(|&e| e < scroll).max()
+    };
+    target.unwrap_or(scroll).min(max)
+}
+
+/// Where the edge tabs sit: a three-cell tab centred on the band's left edge
+/// when columns hide off-screen that way, likewise on the right. Single
+/// source for drawing and for hit-testing.
+pub fn strip_edge_tabs(
+    columns: &[StripColumn],
+    column_width: u16,
+    area: Rect,
+    scroll: usize,
+) -> (Option<Rect>, Option<Rect>) {
+    if area.height < 3 || area.width < 4 {
+        return (None, None);
+    }
+    let max = strip_scroll_max(columns, column_width, area.width);
+    let scroll = scroll.min(max);
+    let y = area.y + area.height / 2 - 1;
+    let left = if scroll > 0 {
+        Some(Rect {
+            x: area.x,
+            y,
+            width: 1,
+            height: 3,
+        })
+    } else {
+        None
+    };
+    let right = if scroll < max {
+        Some(Rect {
+            x: area.x + area.width - 1,
+            y,
+            width: 1,
+            height: 3,
+        })
+    } else {
+        None
+    };
+    (left, right)
+}
+
+/// Edge-tab hit: `Some(forward)` when the point sits on a tab, `forward`
+/// meaning "reveal columns to the right". Single source with the drawing.
+pub fn strip_edge_tab_at(
+    node: &PaneLayout,
+    area: Rect,
+    rendered_scroll: usize,
+    col: u16,
+    row: u16,
+) -> Option<bool> {
+    let PaneLayout::Strip {
+        columns,
+        column_width,
+    } = node
+    else {
+        return None;
+    };
+    let (left, right) = strip_edge_tabs(columns, *column_width, area, rendered_scroll);
+    let on = |r: Rect| col >= r.x && col < r.x + r.width && row >= r.y && row < r.y + r.height;
+    if let Some(l) = left {
+        if on(l) {
+            return Some(false);
+        }
+    }
+    if let Some(r) = right {
+        if on(r) {
+            return Some(true);
+        }
+    }
+    None
+}
+
 pub fn strip_scroll_max(columns: &[StripColumn], column_width: u16, area_width: u16) -> usize {
     let total: usize = column_widths(columns, column_width, area_width)
         .iter()
@@ -1228,16 +1341,8 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             columns,
             column_width,
         } => {
-            // While a glide is in flight the eased position is the truth:
-            // resolving it against the focus would snap every intermediate
-            // frame to the glide's destination and the scroll would look
-            // instant. With no glide running, resolve so a focus change that
-            // arrived without a scroll command still pulls its pane on screen.
-            let scroll = if app.strip_scroll_anim.is_some() {
-                app.visual_scroll()
-            } else {
-                resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane)
-            };
+            // The drawn offset: glide mid-flight, else focus-resolved.
+            let scroll = rendered_strip_scroll(node, area, app);
             let areas = strip_areas_at(columns, *column_width, area, scroll);
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
@@ -1272,6 +1377,17 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
                             }
                         }
                     }
+                }
+            }
+            // Edge tabs: a notch on the frame where columns hide off-screen.
+            let (left_tab, right_tab) = strip_edge_tabs(columns, *column_width, area, scroll);
+            let buf = frame.buffer_mut();
+            for (tab, chevron) in [(left_tab, '◂'), (right_tab, '▸')] {
+                if let Some(tab) = tab {
+                    let mid = tab.y + 1;
+                    drop_mark(buf, tab.x, tab.y, Some('│'));
+                    drop_mark(buf, tab.x, mid, Some(chevron));
+                    drop_mark(buf, tab.x, tab.y + 2, Some('│'));
                 }
             }
             render_strip_nav(frame, columns, *column_width, area, scroll);
@@ -2221,6 +2337,74 @@ mod tests {
         assert_eq!(z.x + z.width, c.x, "one blank between close and zoom");
         assert_eq!(r.x + r.width, z.x, "one blank between zoom and resize");
         assert!(r.x > rect.x + rect.width / 2, "right half of the border");
+    }
+
+    #[test]
+    fn scroll_step_walks_column_boundaries() {
+        let columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        // Three 60-wide columns, viewport 120: max scroll is 60.
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 0, true), 60);
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 60, true), 60, "clamped");
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 60, false), 0);
+        // Mid-column scroll snaps flush first.
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 30, false), 0);
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 30, true), 60);
+    }
+
+    #[test]
+    fn scroll_step_handles_uneven_columns() {
+        let mut columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        columns[0].width = 0.25; // 30 of 120
+        columns[1].width = 0.5; // 60
+                                // Edges at 0, 30, 90; total 150; viewport 120 -> max 30.
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 0, true), 30);
+        assert_eq!(
+            strip_scroll_step(&columns, 0, 120, 30, true),
+            30,
+            "next edge 90 clamps to max 30"
+        );
+        assert_eq!(strip_scroll_step(&columns, 0, 120, 30, false), 0);
+    }
+
+    #[test]
+    fn edge_tabs_appear_only_where_columns_hide() {
+        let columns: Vec<StripColumn> =
+            (1..=4u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        let area = Rect {
+            x: 24,
+            y: 1,
+            width: 120,
+            height: 21,
+        };
+        // Four 60-wide columns: max scroll 120.
+        let (l, r) = strip_edge_tabs(&columns, 0, area, 0);
+        assert!(l.is_none(), "nothing left of scroll 0");
+        assert_eq!(r.unwrap().x, 24 + 120 - 1);
+        let (l, r) = strip_edge_tabs(&columns, 0, area, 60);
+        assert_eq!(l.unwrap().x, 24);
+        assert!(r.is_some());
+        let (l, r) = strip_edge_tabs(&columns, 0, area, 120);
+        assert!(l.is_some());
+        assert!(r.is_none(), "at max: nothing further right");
+        // Tabs are three cells tall, centred on the band.
+        let (_, r) = strip_edge_tabs(&columns, 0, area, 0);
+        let tab = r.unwrap();
+        assert_eq!((tab.y, tab.height), (1 + 21 / 2 - 1, 3));
+    }
+
+    #[test]
+    fn edge_tabs_respect_tiny_bands() {
+        let columns: Vec<StripColumn> =
+            (1..=3u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        let flat = Rect {
+            x: 0,
+            y: 0,
+            width: 120,
+            height: 2,
+        };
+        assert_eq!(strip_edge_tabs(&columns, 0, flat, 30), (None, None));
     }
 
     #[test]

@@ -73,6 +73,24 @@ fn content_area(term_size: ratatui::layout::Rect, app: &App) -> ratatui::layout:
     compute_pane_area(term_size.width, term_size.height, app)
 }
 
+/// Step the viewport one column without moving the focus. The resolve keeps
+/// the focused pane on screen, so state and render stay identical.
+fn step_strip_viewport(app: &mut App, area: ratatui::layout::Rect, forward: bool) {
+    let rscroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), area, app);
+    if let orbt_protocol::PaneLayout::Strip {
+        columns,
+        column_width,
+    } = app.pane_tree()
+    {
+        let raw =
+            orbt_tui::tui::strip_scroll_step(columns, *column_width, area.width, rscroll, forward);
+        let target =
+            orbt_tui::tui::resolved_strip_scroll(&app.layout(), area, raw, app.active_pane);
+        app.set_strip_scroll(target);
+        app.needs_redraw = true;
+    }
+}
+
 fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layout::Rect {
     if app.mobile_mode {
         // Mirror render_mobile: header on top, the mobile tab bar at the
@@ -2082,6 +2100,19 @@ async fn handle_mobile_mouse(
                     MobileView::Terminal => {
                         // Same area the renderer laid the panes out in.
                         let pane_area = compute_pane_area(term_w, term_h, app);
+                        // Edge tabs, the same affordance as the desktop frame.
+                        let rscroll =
+                            orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app);
+                        if let Some(forward) = orbt_tui::tui::strip_edge_tab_at(
+                            app.pane_tree(),
+                            pane_area,
+                            rscroll,
+                            mouse.column,
+                            mouse.row,
+                        ) {
+                            step_strip_viewport(app, pane_area, forward);
+                            return;
+                        }
                         // Check for pane click — same logic as desktop but with mobile area.
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
@@ -3318,6 +3349,20 @@ async fn handle_mouse(
             }
             if button_hit {
                 return;
+            }
+            // Edge tabs step the viewport a column; the focus stays put.
+            if app.zoomed_pane.is_none() {
+                let rscroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app);
+                if let Some(forward) = orbt_tui::tui::strip_edge_tab_at(
+                    app.pane_tree(),
+                    pane_area,
+                    rscroll,
+                    mouse.column,
+                    mouse.row,
+                ) {
+                    step_strip_viewport(app, pane_area, forward);
+                    return;
+                }
             }
             // A lower pane's top border IS the split line, so this check comes
             // after the buttons: a click on a control must not arm a drag.
