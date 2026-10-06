@@ -1205,6 +1205,18 @@ pub fn find_split_at_cursor(
     }
 }
 
+/// Paint one cell of the drop indicator, clipped to the buffer.
+fn drop_mark(buf: &mut ratatui::buffer::Buffer, x: u16, y: u16, ch: Option<char>) {
+    let a = *buf.area();
+    if x >= a.x && x < a.x + a.width && y >= a.y && y < a.y + a.height {
+        let Some(cell) = buf.cell_mut((x, y)) else { return };
+        if let Some(ch) = ch {
+            cell.set_char(ch);
+        }
+        cell.set_style(Style::default().fg(accent()));
+    }
+}
+
 fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App) {
     match node {
         PaneLayout::Leaf(pid) => {
@@ -1228,6 +1240,36 @@ fn render_pane_tree(frame: &mut Frame, area: Rect, node: &PaneLayout, app: &App)
             for (pid, rect, col_skip) in &areas {
                 if rect.width > 0 {
                     render_single_pane(frame, *rect, *pid, app, *col_skip);
+                }
+            }
+            if let Some((target, pos)) = &app.drop_target {
+                if let Some((_, rect, _)) = areas.iter().find(|(pid, ..)| pid == target) {
+                    let buf = frame.buffer_mut();
+                    match pos {
+                        orbt_protocol::PaneDropPos::Before => {
+                            for y in rect.y..rect.y + rect.height {
+                                drop_mark(buf, rect.x, y, Some('┃'));
+                            }
+                        }
+                        orbt_protocol::PaneDropPos::After => {
+                            for y in rect.y..rect.y + rect.height {
+                                drop_mark(buf, rect.x + rect.width.saturating_sub(1), y, Some('┃'));
+                            }
+                        }
+                        orbt_protocol::PaneDropPos::Stack => {
+                            for y in rect.y..rect.y + rect.height {
+                                for x in rect.x..rect.x + rect.width {
+                                    let border = y == rect.y
+                                        || y == rect.y + rect.height - 1
+                                        || x == rect.x
+                                        || x == rect.x + rect.width - 1;
+                                    if border {
+                                        drop_mark(buf, x, y, None);
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             }
             render_strip_nav(frame, columns, *column_width, area, scroll);

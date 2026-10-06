@@ -788,6 +788,10 @@ pub struct App {
     pub tick_count: u64,
     pub drag_tab: Option<usize>,
     pub drag_split: Option<(PaneId, PaneId, SplitDir, f32)>,
+    /// Pane being dragged by its title bar (strip reorder / stack).
+    pub drag_pane: Option<PaneId>,
+    /// Live drop target while `drag_pane` is airborne, for the indicator.
+    pub drop_target: Option<(PaneId, orbt_protocol::PaneDropPos)>,
     /// When set, this pane is rendered alone at full size. The server-side
     /// PaneLayout tree is untouched; other panes keep running, just hidden.
     pub zoomed_pane: Option<PaneId>,
@@ -1015,6 +1019,8 @@ impl App {
             tick_count: 0,
             drag_tab: None,
             drag_split: None,
+            drag_pane: None,
+            drop_target: None,
             zoomed_pane: None,
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,

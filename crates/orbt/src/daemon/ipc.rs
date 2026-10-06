@@ -156,6 +156,15 @@ where
                         let session = space_manager.active_session().await;
                         session.swap_pane(tab_id, pane, towards_left).await;
                     }
+                    ClientMessage::MovePane {
+                        tab_id,
+                        pane,
+                        target,
+                        position,
+                    } => {
+                        let session = space_manager.active_session().await;
+                        session.move_pane(tab_id, pane, target, position).await;
+                    }
                     ClientMessage::RequestFullState => {
                         let s = space_manager.collect_full_state().await;
                         let _ = write_msg(&mut stream, &ServerEvent::Welcome {

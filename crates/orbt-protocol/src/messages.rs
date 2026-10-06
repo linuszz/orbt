@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 8; // was 7; column width overrides are band fractions, not cells
+pub const PROTOCOL_VERSION: u32 = 9; // was 8; MovePane + PaneDropPos for drag reorder
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -103,6 +103,12 @@ pub enum ClientMessage {
         tab_id: crate::TabId,
         pane: crate::PaneId,
         towards_left: bool,
+    },
+    MovePane {
+        tab_id: crate::TabId,
+        pane: crate::PaneId,
+        target: crate::PaneId,
+        position: crate::PaneDropPos,
     },
 
     PaneInput {

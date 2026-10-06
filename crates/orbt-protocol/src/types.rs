@@ -24,6 +24,18 @@ pub enum SplitDir {
     Vertical,
 }
 
+/// Where a dragged pane lands relative to the pane it was dropped on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaneDropPos {
+    /// New single-pane column inserted before the target's column.
+    Before,
+    /// New single-pane column inserted after the target's column.
+    After,
+    /// Stacked into the target's column, directly below the target.
+    Stack,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum AgentStatus {
     #[default]
@@ -597,6 +609,61 @@ impl PaneLayout {
         let _ = row_idx;
         true
     }
+
+    /// Move `pane` to a drop position relative to `target` (drag reorder).
+    /// Strip-only: returns false on split trees, on unknown panes, and when
+    /// pane == target. Before/After always create a new single-pane column;
+    /// Stack inserts into the target's column directly below the target.
+    /// A column emptied by the move is removed along with its width override,
+    /// and a column created by the move starts with the inherited width.
+    pub fn move_pane(&mut self, pane: PaneId, target: PaneId, position: PaneDropPos) -> bool {
+        if pane == target {
+            return false;
+        }
+        let PaneLayout::Strip { columns, .. } = self else {
+            return false;
+        };
+        let find = |columns: &[StripColumn], p: PaneId| {
+            columns
+                .iter()
+                .enumerate()
+                .find_map(|(ci, c)| c.panes.iter().position(|&x| x == p).map(|ri| (ci, ri)))
+        };
+        let Some((pc, pr)) = find(columns, pane) else {
+            return false;
+        };
+        let Some((tc, tr)) = find(columns, target) else {
+            return false;
+        };
+        columns[pc].panes.remove(pr);
+        // Target coordinates after the removal: the target row shifts up when
+        // the dragged pane sat above it in the same column, and the target
+        // column shifts left when the emptied column before it was removed.
+        let mut tc = tc;
+        let mut tr = tr;
+        if pc == tc && pr < tr {
+            tr -= 1;
+        }
+        if columns[pc].panes.is_empty() {
+            columns.remove(pc);
+            if pc < tc {
+                tc -= 1;
+            }
+        }
+        match position {
+            PaneDropPos::Before => {
+                columns.insert(tc, StripColumn::single(pane));
+            }
+            PaneDropPos::After => {
+                columns.insert(tc + 1, StripColumn::single(pane));
+            }
+            PaneDropPos::Stack => {
+                let row = (tr + 1).min(columns[tc].panes.len());
+                columns[tc].panes.insert(row, pane);
+            }
+        }
+        true
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -947,6 +1014,103 @@ fn converting_to_the_layout_already_in_use_changes_nothing() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn strip(cols: &[&[u32]]) -> PaneLayout {
+        PaneLayout::Strip {
+            columns: cols
+                .iter()
+                .map(|c| StripColumn {
+                    panes: c.iter().map(|&p| PaneId(p)).collect(),
+                    width: 0.0,
+                })
+                .collect(),
+            column_width: 0,
+        }
+    }
+
+    fn col_panes(layout: &PaneLayout) -> Vec<Vec<u32>> {
+        let PaneLayout::Strip { columns, .. } = layout else {
+            panic!("expected strip");
+        };
+        columns
+            .iter()
+            .map(|c| c.panes.iter().map(|p| p.0).collect())
+            .collect()
+    }
+
+    #[test]
+    fn move_before_inserts_a_new_column() {
+        let mut l = strip(&[&[1], &[2], &[3], &[4]]);
+        assert!(l.move_pane(PaneId(4), PaneId(2), PaneDropPos::Before));
+        assert_eq!(col_panes(&l), vec![vec![1], vec![4], vec![2], vec![3]]);
+    }
+
+    #[test]
+    fn move_after_inserts_a_new_column() {
+        let mut l = strip(&[&[1], &[2], &[3], &[4]]);
+        assert!(l.move_pane(PaneId(1), PaneId(3), PaneDropPos::After));
+        assert_eq!(col_panes(&l), vec![vec![2], vec![3], vec![1], vec![4]]);
+    }
+
+    #[test]
+    fn move_before_the_immediate_right_neighbour_is_a_noop_layout() {
+        let mut l = strip(&[&[1], &[2], &[3]]);
+        assert!(l.move_pane(PaneId(2), PaneId(3), PaneDropPos::Before));
+        assert_eq!(col_panes(&l), vec![vec![1], vec![2], vec![3]]);
+    }
+
+    #[test]
+    fn move_emptied_column_is_removed_with_its_width_override() {
+        let mut l = strip(&[&[1], &[2], &[3]]);
+        if let PaneLayout::Strip { columns, .. } = &mut l {
+            columns[0].width = 0.5;
+        }
+        assert!(l.move_pane(PaneId(1), PaneId(3), PaneDropPos::After));
+        assert_eq!(col_panes(&l), vec![vec![2], vec![3], vec![1]]);
+        // The new column inherits; the dead column's 0.5 override is gone.
+        let PaneLayout::Strip { columns, .. } = &l else {
+            panic!();
+        };
+        assert!(columns.iter().all(|c| c.width == 0.0));
+    }
+
+    #[test]
+    fn move_stack_inserts_directly_below_the_target() {
+        let mut l = strip(&[&[1], &[2, 3], &[4]]);
+        assert!(l.move_pane(PaneId(4), PaneId(2), PaneDropPos::Stack));
+        assert_eq!(col_panes(&l), vec![vec![1], vec![2, 4, 3]]);
+    }
+
+    #[test]
+    fn move_stack_within_the_same_column_reorders_rows() {
+        let mut l = strip(&[&[1, 2, 3], &[4]]);
+        // Drag 1 below 3 inside its own column.
+        assert!(l.move_pane(PaneId(1), PaneId(3), PaneDropPos::Stack));
+        assert_eq!(col_panes(&l), vec![vec![2, 3, 1], vec![4]]);
+    }
+
+    #[test]
+    fn move_stack_onto_a_pane_below_the_dragged_in_the_same_column() {
+        let mut l = strip(&[&[1, 2, 3], &[4]]);
+        // Drag 3 below 1: target row shifts after 3 is removed.
+        assert!(l.move_pane(PaneId(3), PaneId(1), PaneDropPos::Stack));
+        assert_eq!(col_panes(&l), vec![vec![1, 3, 2], vec![4]]);
+    }
+
+    #[test]
+    fn move_rejects_unknown_same_or_split_tree() {
+        let mut l = strip(&[&[1], &[2]]);
+        assert!(!l.move_pane(PaneId(1), PaneId(1), PaneDropPos::Before));
+        assert!(!l.move_pane(PaneId(9), PaneId(1), PaneDropPos::Before));
+        assert!(!l.move_pane(PaneId(1), PaneId(9), PaneDropPos::Before));
+        let mut split = PaneLayout::Split {
+            direction: SplitDir::Horizontal,
+            first: Box::new(PaneLayout::Leaf(PaneId(1))),
+            second: Box::new(PaneLayout::Leaf(PaneId(2))),
+            ratio: 0.5,
+        };
+        assert!(!split.move_pane(PaneId(1), PaneId(2), PaneDropPos::Before));
+    }
 
     #[test]
     fn acp_detail_bincode_roundtrip() {

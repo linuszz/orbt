@@ -3343,6 +3343,37 @@ async fn handle_mouse(
                     return;
                 }
             }
+            // Title-bar press in strip mode arms a reorder drag. The pane
+            // takes focus immediately; click vs drag is decided by whether a
+            // Drag event arrives before the release.
+            if app.zoomed_pane.is_none() && app.pane_tree().is_strip() {
+                for (pid, rect) in &areas {
+                    let on_title = mouse.row == rect.y
+                        && mouse.column > rect.x
+                        && mouse.column + 1 < rect.x + rect.width;
+                    if on_title {
+                        app.active_pane = *pid;
+                        let target = orbt_tui::tui::resolved_strip_scroll(
+                            &app.layout(),
+                            pane_area,
+                            app.visual_scroll(),
+                            *pid,
+                        );
+                        app.set_strip_scroll(target);
+                        let _ = writer
+                            .send(ClientMessage::FocusPane {
+                                tab_id: app.active_tab_id,
+                                pane_id: *pid,
+                            })
+                            .await;
+                        app.selection = None;
+                        app.drag_pane = Some(*pid);
+                        app.drop_target = None;
+                        app.needs_redraw = true;
+                        return;
+                    }
+                }
+            }
             for (pid, rect) in &areas {
                 if mouse.column >= rect.x
                     && mouse.column < rect.x + rect.width
@@ -3594,8 +3625,44 @@ async fn handle_mouse(
                 app.needs_redraw = true;
                 return;
             }
+            if let Some(dragged) = app.drag_pane {
+                // Live drop target: left/right third of the pane under the
+                // cursor reorders the strip, the middle third stacks onto it.
+                let areas = orbt_tui::tui::compute_leaf_areas(
+                    &app.layout(),
+                    pane_area,
+                    app.visual_scroll(),
+                );
+                let mut next = None;
+                for (pid, rect) in &areas {
+                    if *pid == dragged {
+                        continue;
+                    }
+                    if mouse.column >= rect.x
+                        && mouse.column < rect.x + rect.width
+                        && mouse.row >= rect.y
+                        && mouse.row < rect.y + rect.height
+                    {
+                        let third = rect.width / 3;
+                        let pos = if mouse.column < rect.x + third {
+                            orbt_protocol::PaneDropPos::Before
+                        } else if mouse.column >= rect.x + rect.width.saturating_sub(third) {
+                            orbt_protocol::PaneDropPos::After
+                        } else {
+                            orbt_protocol::PaneDropPos::Stack
+                        };
+                        next = Some((*pid, pos));
+                        break;
+                    }
+                }
+                if app.drop_target != next {
+                    app.drop_target = next;
+                    app.needs_redraw = true;
+                }
+                return;
+            }
             // Forward mouse drag to PTY if mouse reporting is active
-            if app.drag_split.is_none() && app.drag_tab.is_none() {
+            if app.drag_split.is_none() && app.drag_tab.is_none() && app.drag_pane.is_none() {
                 let has_mouse = app
                     .panes
                     .get(&app.active_pane)
@@ -3677,7 +3744,7 @@ async fn handle_mouse(
         }
         MouseEventKind::Up(MouseButton::Left) => {
             // Forward mouse release to PTY if mouse reporting is active
-            if app.drag_split.is_none() && app.drag_tab.is_none() {
+            if app.drag_split.is_none() && app.drag_tab.is_none() && app.drag_pane.is_none() {
                 let pane_area = content_area(term_size, app);
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
@@ -3715,6 +3782,27 @@ async fn handle_mouse(
                         }
                         break;
                     }
+                }
+            }
+            if let Some(dragged) = app.drag_pane.take() {
+                if let Some((target, position)) = app.drop_target.take() {
+                    let _ = writer
+                        .send(ClientMessage::MovePane {
+                            tab_id: app.active_tab_id,
+                            pane: dragged,
+                            target,
+                            position,
+                        })
+                        .await;
+                    // Focus follows the moved pane.
+                    app.active_pane = dragged;
+                    let _ = writer
+                        .send(ClientMessage::FocusPane {
+                            tab_id: app.active_tab_id,
+                            pane_id: dragged,
+                        })
+                        .await;
+                    app.needs_redraw = true;
                 }
             }
             if let Some((first_pane, second_pane, _dir, _)) = app.drag_split.take() {

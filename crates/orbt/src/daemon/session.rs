@@ -509,6 +509,24 @@ impl SessionState {
             .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
     }
 
+    pub async fn move_pane(
+        &self,
+        tab_id: TabId,
+        pane: PaneId,
+        target: PaneId,
+        position: orbt_protocol::PaneDropPos,
+    ) {
+        {
+            let mut tabs = self.tabs.write().await;
+            if let Some(tab) = tabs.get_mut(&tab_id) {
+                tab.layout.move_pane(pane, target, position);
+            }
+        }
+        let _ = self
+            .event_bus
+            .send(ServerEvent::SpaceUpdated(self.collect_space_info().await));
+    }
+
     pub async fn resize_split(
         &self,
         _tab_id: TabId,
