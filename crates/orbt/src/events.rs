@@ -84,9 +84,9 @@ fn step_strip_viewport(app: &mut App, area: ratatui::layout::Rect, forward: bool
     {
         let raw =
             orbt_tui::tui::strip_scroll_step(columns, *column_width, area.width, rscroll, forward);
-        let target =
-            orbt_tui::tui::resolved_strip_scroll(&app.layout(), area, raw, app.active_pane);
-        app.set_strip_scroll(target);
+        // Peek: the viewport may leave the focus. set_strip_scroll anchors the
+        // drawing to the raw offset until the focus itself moves.
+        app.set_strip_scroll(raw);
         app.needs_redraw = true;
     }
 }
@@ -2117,12 +2117,7 @@ async fn handle_mobile_mouse(
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
                             pane_area,
-                            orbt_tui::tui::resolved_strip_scroll(
-                                &app.layout(),
-                                pane_area,
-                                app.visual_scroll(),
-                                app.active_pane,
-                            ),
+                            orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                         );
                         for (pid, rect) in &leaves {
                             if mouse.column >= rect.x
@@ -2866,13 +2861,8 @@ async fn handle_mouse(
                             .collect::<Vec<_>>(),
                     );
                     let focus = app.active_pane;
-                    let scroll = orbt_tui::tui::strip_scroll_resolve(
-                        columns,
-                        effective,
-                        band.width,
-                        app.visual_scroll(),
-                        focus,
-                    );
+                    let scroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), band, app);
+                    let _ = focus;
                     let nav = orbt_tui::tui::strip_nav(band, effective, &columns_clone, scroll);
                     let on = |r: ratatui::layout::Rect| {
                         mouse.column >= r.x && mouse.column < r.x + r.width && mouse.row == r.y
@@ -3265,12 +3255,7 @@ async fn handle_mouse(
             let areas = orbt_tui::tui::compute_leaf_areas(
                 &app.layout(),
                 pane_area,
-                orbt_tui::tui::resolved_strip_scroll(
-                    &app.layout(),
-                    pane_area,
-                    app.visual_scroll(),
-                    app.active_pane,
-                ),
+                orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
             );
             // Window controls on the border row win over anything inside the
             // pane, the same rule tuios gives its title-bar buttons.
@@ -3518,12 +3503,7 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    orbt_tui::tui::resolved_strip_scroll(
-                        &app.layout(),
-                        pane_area,
-                        app.visual_scroll(),
-                        app.active_pane,
-                    ),
+                    orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                 );
                 let mut found_pane = None;
                 for (pid, rect) in &areas {
@@ -3558,12 +3538,8 @@ async fn handle_mouse(
                     // column; measure from that column's on-screen left edge,
                     // which coincides with the band's left only for the first
                     // column at zero scroll.
-                    let resolved = orbt_tui::tui::resolved_strip_scroll(
-                        &app.layout(),
-                        pane_area,
-                        app.visual_scroll(),
-                        app.active_pane,
-                    );
+                    let resolved =
+                        orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app);
                     let left_edge = match app.pane_tree() {
                         orbt_protocol::PaneLayout::Strip {
                             columns,
@@ -3695,12 +3671,7 @@ async fn handle_mouse(
                     let areas = orbt_tui::tui::compute_leaf_areas(
                         &app.layout(),
                         pane_area,
-                        orbt_tui::tui::resolved_strip_scroll(
-                            &app.layout(),
-                            pane_area,
-                            app.visual_scroll(),
-                            app.active_pane,
-                        ),
+                        orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                     );
                     for (pid, rect) in &areas {
                         if *pid == app.active_pane
@@ -3735,12 +3706,7 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    orbt_tui::tui::resolved_strip_scroll(
-                        &app.layout(),
-                        pane_area,
-                        app.visual_scroll(),
-                        app.active_pane,
-                    ),
+                    orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                 );
                 for (pid, rect) in &areas {
                     if *pid == sel_pane_id {
@@ -3772,12 +3738,7 @@ async fn handle_mouse(
                 let areas = orbt_tui::tui::compute_leaf_areas(
                     &app.layout(),
                     pane_area,
-                    orbt_tui::tui::resolved_strip_scroll(
-                        &app.layout(),
-                        pane_area,
-                        app.visual_scroll(),
-                        app.active_pane,
-                    ),
+                    orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
                 );
                 for (pid, rect) in &areas {
                     if *pid == app.active_pane
@@ -3941,12 +3902,7 @@ async fn handle_mouse(
             let hovered = orbt_tui::tui::compute_leaf_areas(
                 &app.layout(),
                 pane_area,
-                orbt_tui::tui::resolved_strip_scroll(
-                    &app.layout(),
-                    pane_area,
-                    app.visual_scroll(),
-                    app.active_pane,
-                ),
+                orbt_tui::tui::rendered_strip_scroll(&app.layout(), pane_area, app),
             )
             .iter()
             .find(|(_, rect)| {

@@ -756,6 +756,12 @@ pub struct App {
     pub strip_scroll: usize,
     /// Glide toward `strip_scroll`; while set, drawing uses the eased midpoint.
     pub strip_scroll_anim: Option<Anim>,
+    /// The focus the last scroll command was made for. While the active pane
+    /// still is the anchor, drawing trusts the stored offset exactly — that
+    /// is what lets edge tabs and the rail peek at columns the focus is not
+    /// on. Once the focus moves elsewhere, drawing resolves the offset against
+    /// the new focus and pulls it back on screen.
+    pub strip_scroll_anchor: PaneId,
     /// Tick the pane overview opened at, so it can grow from nothing.
     pub overview_anim_start: Option<u64>,
     /// Tick each freshly opened pane appeared at, so it grows into its slot.
@@ -967,6 +973,7 @@ impl App {
             show_overview: false,
             strip_scroll: 0,
             strip_scroll_anim: None,
+            strip_scroll_anchor: PaneId(0),
             overview_anim_start: None,
             pane_open_ticks: std::collections::HashMap::new(),
             context_menu: None,
@@ -1228,12 +1235,7 @@ impl App {
         if !self.pane_tree().is_strip() {
             return;
         }
-        let target = crate::tui::resolved_strip_scroll(
-            &self.layout(),
-            area,
-            self.visual_scroll(),
-            self.active_pane,
-        );
+        let target = crate::tui::rendered_strip_scroll(&self.layout(), area, self);
         self.set_strip_scroll(target);
     }
 
@@ -1241,6 +1243,7 @@ impl App {
     /// the glide already in flight; a new target re-aims from wherever the
     /// viewport has visibly reached, so chained moves stay smooth.
     pub fn set_strip_scroll(&mut self, target: usize) {
+        self.strip_scroll_anchor = self.active_pane;
         if let Some(anim) = &self.strip_scroll_anim {
             if anim.to == target as f32 {
                 return;
@@ -1894,6 +1897,55 @@ pub mod tests {
             to: 2.0,
         };
         assert_eq!(instant.value_at(0), None);
+    }
+
+    #[test]
+    fn peeked_viewport_stays_put_until_the_focus_moves() {
+        let mut app = make_test_app(140, 30);
+        app.tick_count = 10;
+        // Three 60-wide columns over a 116-wide band; focus on the last one.
+        let tree = &mut app.tabs[0].pane_tree;
+        *tree = orbt_protocol::PaneLayout::Strip {
+            columns: (1..=3u32)
+                .map(|i| orbt_protocol::StripColumn::single(PaneId(i)))
+                .collect(),
+            column_width: 0,
+        };
+        app.active_pane = PaneId(3);
+        let band = ratatui::layout::Rect {
+            x: 24,
+            y: 1,
+            width: 116,
+            height: 26,
+        };
+        // Auto width: halves of 116 -> columns [0,58), [58,116), [116,174);
+        // max scroll is 58. Peek at the far end with the focus left behind:
+        // the drawing must trust the raw offset, not chase the focus.
+        app.set_strip_scroll(58);
+        app.tick_count += SCROLL_ANIM_TICKS;
+        app.finish_animations();
+        assert_eq!(app.strip_scroll_anchor, PaneId(3));
+        assert_eq!(
+            crate::tui::rendered_strip_scroll(&app.layout(), band, &app),
+            58,
+            "anchored peek draws the raw offset"
+        );
+        // The focus moving without a scroll command re-engages the pull:
+        // pane 1 at [0,58) is nowhere in [58,174), so the view follows it.
+        app.active_pane = PaneId(1);
+        assert_eq!(
+            crate::tui::rendered_strip_scroll(&app.layout(), band, &app),
+            0
+        );
+        // Scrolling away again re-anchors: trusted as-is, focus off-screen.
+        app.set_strip_scroll(58);
+        app.tick_count += SCROLL_ANIM_TICKS;
+        app.finish_animations();
+        assert_eq!(app.strip_scroll_anchor, PaneId(1));
+        assert_eq!(
+            crate::tui::rendered_strip_scroll(&app.layout(), band, &app),
+            58
+        );
     }
 
     #[test]

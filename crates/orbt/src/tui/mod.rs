@@ -946,10 +946,13 @@ pub fn strip_scroll_resolve(
 
 /// The furthest the band can be scrolled.
 /// The offset the strip is drawn at right now: the eased glide position while
-/// one is in flight, otherwise the stored offset resolved against the focus.
-/// Hit-testing must use exactly this, or clicks land where nothing is drawn.
+/// one is in flight; the stored offset exactly while the focus still is the
+/// anchor of the last scroll command (a deliberate peek left as-is); resolved
+/// against the focus otherwise, so a focus that moved without a scroll
+/// command still gets pulled on screen. Hit-testing must use exactly this,
+/// or clicks land where nothing is drawn.
 pub fn rendered_strip_scroll(node: &PaneLayout, area: Rect, app: &App) -> usize {
-    if app.strip_scroll_anim.is_some() {
+    if app.strip_scroll_anim.is_some() || app.active_pane == app.strip_scroll_anchor {
         app.visual_scroll()
     } else {
         resolved_strip_scroll(node, area, app.visual_scroll(), app.active_pane)
