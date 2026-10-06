@@ -11,6 +11,10 @@ use crate::ipc::IpcClient;
 use orbt_tui::app::{load_settings, App};
 use orbt_tui::tui;
 
+fn has_flag(flag: &str) -> bool {
+    std::env::args().any(|a| a == flag)
+}
+
 fn parse_remote_arg() -> Option<String> {
     let args: Vec<String> = std::env::args().collect();
     let mut iter = args.iter().skip(1);
@@ -27,12 +31,23 @@ fn parse_remote_arg() -> Option<String> {
 
 // Attempt to connect to local orbtd. On failure, spawn `orbit daemon` as a
 // background process, wait briefly for it to bind the socket, then retry once.
-async fn connect_local_with_autostart() -> Result<(
+async fn connect_local_with_autostart(
+    fresh: bool,
+) -> Result<(
     crate::ipc::IpcWriter,
     crate::ipc::IpcReader,
     orbt_protocol::FullState,
 )> {
     if let Ok((ipc, state)) = IpcClient::connect().await {
+        if fresh {
+            // The running daemon already made its restore decision, so a
+            // fresh session is only possible after it stops.
+            eprintln!(
+                "orbt: --fresh ignored, a daemon is already running. \
+                 Stop it first (pkill -TERM -f 'orbt daemon'), or start one \
+                 with: orbt daemon --no-restore"
+            );
+        }
         let (w, r) = ipc.into_split();
         return Ok((w, r, state));
     }
@@ -49,9 +64,12 @@ async fn connect_local_with_autostart() -> Result<(
 
     debug!("orbtd not running, auto-starting daemon...");
     let exe = std::env::current_exe().context("cannot resolve orbit binary path")?;
-    std::process::Command::new(&exe)
-        .arg("daemon")
-        .stdin(std::process::Stdio::null())
+    let mut cmd = std::process::Command::new(&exe);
+    cmd.arg("daemon");
+    if fresh {
+        cmd.arg("--no-restore");
+    }
+    cmd.stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
@@ -90,7 +108,7 @@ async fn main() -> Result<()> {
             .with_file(true)
             .with_line_number(true)
             .init();
-        return daemon::run().await;
+        return daemon::run(has_flag("--no-restore")).await;
     }
 
     tracing_subscriber::fmt()
@@ -107,7 +125,7 @@ async fn main() -> Result<()> {
         ssh::connect_remote(&spec).await?
     } else {
         debug!("connecting to local orbtd...");
-        connect_local_with_autostart().await?
+        connect_local_with_autostart(has_flag("--fresh")).await?
     };
 
     tui::install_panic_hook();

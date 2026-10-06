@@ -60,7 +60,7 @@ fn release_lock(path: &Path) {
     let _ = std::fs::remove_file(path);
 }
 
-pub async fn run() -> Result<()> {
+pub async fn run(no_restore: bool) -> Result<()> {
     let lock_path = lock_file_path();
     acquire_lock(&lock_path).context("failed to acquire lock")?;
 
@@ -88,7 +88,14 @@ pub async fn run() -> Result<()> {
         .ok()
         .and_then(|p| p.to_str().map(String::from))
         .unwrap_or_else(|| ".".to_string());
-    // Restore from a saved snapshot if one exists; otherwise start with a fresh default space.
+    // Restore from a saved snapshot if one exists; otherwise start with a
+    // fresh default space. --no-restore abandons the saved session entirely:
+    // deleting it now means a later crash cannot resurrect what the user
+    // explicitly chose to discard.
+    if no_restore {
+        crate::daemon::snapshot::delete();
+        info!("starting fresh (--no-restore): saved session discarded");
+    }
     let space_manager: Arc<SpaceManager> = match crate::daemon::snapshot::load() {
         Ok(Some(snap)) => {
             let sm = SpaceManager::new_empty(event_bus.clone(), shell.clone(), cwd.clone());
