@@ -2171,6 +2171,31 @@ mod tests {
     }
 
     #[test]
+    fn clicking_a_fully_visible_pane_never_moves_the_viewport() {
+        // resolve is a no-op for a focused pane already fully on screen, so
+        // converging scroll state at click time freezes the view as it is.
+        let columns: Vec<StripColumn> =
+            (1..=5u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        // Viewport 120, columns 3/4 on screen at scroll 120.
+        assert_eq!(
+            strip_scroll_resolve(&columns, 0, 120, 120, PaneId(3)),
+            120,
+            "pane 3 fully visible at scroll 120: no movement"
+        );
+        assert_eq!(
+            strip_scroll_resolve(&columns, 0, 120, 120, PaneId(4)),
+            120,
+            "pane 4 fully visible at scroll 120: no movement"
+        );
+        // A pane half off the left edge pulls in by exactly the hidden part.
+        assert_eq!(
+            strip_scroll_resolve(&columns, 0, 120, 100, PaneId(2)),
+            60,
+            "pane 2 [60,120) hidden left of 100: pull to its left edge"
+        );
+    }
+
+    #[test]
     fn three_auto_columns_on_a_120_band_are_halves() {
         // Mobile-width sanity: no overrides means every column takes half
         // the band, two fit on screen and the third scrolls.

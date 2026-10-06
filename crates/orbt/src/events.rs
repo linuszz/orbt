@@ -74,6 +74,21 @@ fn content_area(term_size: ratatui::layout::Rect, app: &App) -> ratatui::layout:
 }
 
 fn compute_pane_area(term_cols: u16, term_rows: u16, app: &App) -> ratatui::layout::Rect {
+    if app.mobile_mode {
+        // Mirror render_mobile: header on top, the mobile tab bar at the
+        // bottom, and the strip nav on its own row inside the content region.
+        // Without this, event geometry and render geometry disagree on wide
+        // mobile screens (cols >= 80): the desktop branch below subtracts a
+        // sidebar the mobile renderer does not draw.
+        return ratatui::layout::Rect {
+            x: 0,
+            y: 1,
+            width: term_cols,
+            height: term_rows
+                .saturating_sub(2 + orbt_tui::tui::strip_nav_height(&app.layout()))
+                .max(5),
+        };
+    }
     let sidebar_w: u16 = if term_cols < 80 {
         SIDEBAR_COLLAPSED_W
     } else if app.sidebar_visible {
@@ -2065,13 +2080,8 @@ async fn handle_mobile_mouse(
             if mouse.row > 0 && mouse.row < nav_row {
                 match app.mobile_view {
                     MobileView::Terminal => {
-                        // Forward click to PTY.
-                        let pane_area = ratatui::layout::Rect {
-                            x: 0,
-                            y: 1,
-                            width: term_w,
-                            height: nav_row.saturating_sub(1),
-                        };
+                        // Same area the renderer laid the panes out in.
+                        let pane_area = compute_pane_area(term_w, term_h, app);
                         // Check for pane click — same logic as desktop but with mobile area.
                         let leaves = orbt_tui::tui::compute_leaf_areas(
                             &app.layout(),
@@ -2091,6 +2101,16 @@ async fn handle_mobile_mouse(
                             {
                                 if app.active_pane != *pid {
                                     app.active_pane = *pid;
+                                    // A tapped pane is on screen, so tapping
+                                    // must not scroll: freeze the viewport at
+                                    // what is drawn right now.
+                                    let target = orbt_tui::tui::resolved_strip_scroll(
+                                        &app.layout(),
+                                        pane_area,
+                                        app.visual_scroll(),
+                                        *pid,
+                                    );
+                                    app.set_strip_scroll(target);
                                     let _ = writer
                                         .send(ClientMessage::FocusPane {
                                             tab_id: app.active_tab_id,
@@ -3330,6 +3350,16 @@ async fn handle_mouse(
                     && mouse.row < rect.y + rect.height
                 {
                     app.active_pane = *pid;
+                    // A clicked pane is on screen by definition, so clicking
+                    // must not scroll: converge the glide state to what is
+                    // currently drawn, cancelling any in-flight scroll.
+                    let target = orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        *pid,
+                    );
+                    app.set_strip_scroll(target);
                     let _ = writer
                         .send(ClientMessage::FocusPane {
                             tab_id: app.active_tab_id,
