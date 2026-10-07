@@ -16,13 +16,16 @@ pub struct HookTaxonomy {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HookTopicSpec {
     pub mode: String,
-    pub delivery: String,
     #[serde(default)]
-    pub filterable_fields: Vec<String>,
+    pub default_delivery: Option<String>,
     #[serde(default)]
-    pub allowed_scopes: Vec<String>,
+    pub filterable_fields: HashMap<String, serde_json::Value>,
     #[serde(default)]
-    pub default_scope: Option<String>,
+    pub payload: Option<serde_json::Value>,
+    #[serde(default)]
+    pub source: Option<String>,
+    #[serde(default)]
+    pub requires_capability: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,10 +35,8 @@ pub struct CommandTaxonomy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandSpec {
-    #[serde(default)]
-    pub allowed_scopes: Vec<String>,
-    #[serde(default)]
-    pub default_scope: Option<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -45,12 +46,8 @@ pub struct CapabilityTaxonomy {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CapabilitySpec {
-    #[serde(default)]
-    pub allowed_scopes: Vec<String>,
-    #[serde(default)]
-    pub default_scope: Option<String>,
-    #[serde(default)]
-    pub enabled_surface: Option<String>,
+    #[serde(flatten)]
+    pub extra: HashMap<String, serde_json::Value>,
 }
 
 impl Taxonomy {

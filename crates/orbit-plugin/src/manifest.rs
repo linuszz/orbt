@@ -183,9 +183,16 @@ pub struct CommandProvidedDecl {
 pub struct CapabilityDecl {
     pub name: String,
     #[serde(default)]
-    pub scopes: Vec<String>,
+    pub scopes: Vec<ScopeDecl>,
     #[serde(default)]
     pub default_scope: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ScopeDecl {
+    KeyValue { key: String, value: String },
+    String(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
