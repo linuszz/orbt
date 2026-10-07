@@ -1,10 +1,10 @@
 # PROJECT KNOWLEDGE BASE
 
-**Generated:** 2026-08-12
-**Commit:** c020471
+**Generated:** 2026-10-07
+**Commit:** ab2c6d1 (v0.2.0)
 **Branch:** main
 
-Public release: **v0.1.11** (2026-07-28). Development HEAD is ahead of this release (agent monitor v2 merged, ghostty removed).
+Public release: **v0.2.0** (2026-10-07). Development HEAD is at this release.
 
 ## AGENT INSTRUCTIONS
 
@@ -27,14 +27,15 @@ orbit/
 │   │   └── src/
 │   │       ├── app.rs / events.rs / ipc.rs / lib.rs / main.rs / ssh.rs
 │   │       ├── daemon/
-│   │       │   ├── mod.rs / agent.rs / io.rs / ipc.rs / pty.rs / session.rs
+│   │       │   ├── mod.rs / agent.rs / io.rs / ipc.rs / pty.rs / session.rs / snapshot.rs
 │   │       └── tui/
 │   │           ├── mod.rs / theme.rs
-│   │           └── widgets/           # 14 widget files
+│   │           └── widgets/           # 15 widget files
 │   │               ├── agent_monitor.rs     # Satellites panel
 │   │               ├── eclipse_modal.rs     # Blocked-agent intervention
 │   │               ├── launch_modal.rs      # Agent type picker
 │   │               ├── agent_detail_modal.rs     # ACP agent detail overlay
+│   │               ├── pane_overview.rs     # Pane overview / strip overlay
 │   │               ├── spaces_sidebar.rs    # Multi-space sidebar
 │   │               ├── command_palette.rs   # Flight Deck overlay
 │   │               ├── status_bar.rs
@@ -54,9 +55,9 @@ orbit/
 
 | Task | Location | Notes |
 |------|----------|-------|
-| IPC types/contract | `orbt-protocol/src/messages.rs` | Wire contract -- source of truth (41 variants: 25 ClientMessage + 16 ServerEvent) |
+| IPC types/contract | `orbt-protocol/src/messages.rs` | Wire contract -- source of truth (45 variants: 29 ClientMessage + 16 ServerEvent) |
 | Protocol encode/decode | `orbt-protocol/src/encoding.rs` | bincode 2.x serde helpers |
-| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 3347 lines |
+| TUI state + events | `orbt/src/app.rs` / `events.rs` | `App` struct: tabs, spaces, agents, modals; `events.rs` is 4273 lines |
 | Server session/PTY | `orbt/src/daemon/session.rs` / `pty.rs` | Tab management, PTY spawn |
 | **Agent runtime** | `orbt/src/daemon/agent.rs` | Detection, Eclipse, metrics -- `AgentRegistry` |
 | Client IPC writer | `orbt/src/ipc.rs` | Background channel -- socket task |
@@ -69,7 +70,7 @@ orbit/
 
 | Symbol | Type | Location | Role |
 |--------|------|----------|------|
-| `ClientMessage` | enum | `orbt-protocol/src/messages.rs` | IPC request contract (25 variants, PROTOCOL_VERSION = 4) |
+| `ClientMessage` | enum | `orbt-protocol/src/messages.rs` | IPC request contract (29 variants, PROTOCOL_VERSION = 9) |
 | `ServerEvent` | enum | `orbt-protocol/src/messages.rs` | IPC event contract (16 variants) |
 | `Cell` | struct | `orbt-protocol/src/types.rs` | 16 bytes -- DO NOT grow |
 | `App` | struct | `orbt/src/app.rs` | TUI state: tabs, spaces, agents, modals, selection, scroll |
@@ -122,6 +123,9 @@ orbit/
 - **Payload/image paste**: `Ctrl+B I` pastes clipboard images; `UploadPayload` IPC sends them to the remote daemon
 - **OpenCode agent detection**: Detects OpenCode alongside Claude/Codex/Aider/GH-Copilot/Cursor and script runners
 - **Agent Detail Modal**: Per-agent overlay showing ACP tool calls, files touched, token usage; opened via [Detail] button on agent cards
+- **Strip UI (v0.2.0)**: Scrollable pane strip with edge tabs, drag-to-reorder panes, viewport scroll anchor, animation toggle; column widths are band fractions
+- **Session persistence**: `~/.orbt/sessions/session.toml` on shutdown; `orbt kill` stops daemon and wipes session; `--fresh` / `daemon --no-restore` skips restore
+- **Status bar wide mode (v0.2.0)**: shows local time with UTC side-by-side on wide terminals
 
 ## COMMANDS
 
@@ -145,14 +149,15 @@ just qa                          # fmt-check + clippy + test
 - Both sides run VT parsers (accepted 2x CPU tradeoff)
 - `Cell` must stay 16 bytes -- grid clone ~160KB
 - Socket path: `$XDG_RUNTIME_DIR/orbt.sock` -- `$TMPDIR/orbt-<uid>.sock`
-- Protocol: length-prefixed bincode (4MB max); current version is PROTOCOL_VERSION = 4 (bumped from 3 in v0.1.11 — breaking: added AgentAcpUpdated event + AcpDetail types)
+- Protocol: length-prefixed bincode (4MB max); current version is PROTOCOL_VERSION = 9 (bumped from 4 in v0.2.0 cycle — breaking changes across v4→v9: MovePane + PaneDropPos for drag reorder added in final bump)
 - Async lock rule: scope write guards tight; release before any `await` that reads same state
 - Agent detection: `AgentRegistry::watch_pane()` scans last 256 bytes of PTY output for block patterns
 - Agent names matched: `claude`, `codex`, `aider`, `gh-copilot`, `cursor`, `opencode` (+ script runners `node`/`npx`/`python`)
 - **ACP protocol detection**: agents exposing ACP (Agent Client Protocol) get [ACP] badge + detail modal with tool-call tracking
 - PTY output is ANSI-stripped before display in agent fields (`strip_ansi`)
-- `events.rs` is the largest file (3347 lines) -- all key/mouse dispatch lives here
+- `events.rs` is the largest file (4273 lines) -- all key/mouse dispatch lives here
 - Settings persisted to `~/.config/orbt/settings.toml`
+- Session snapshot persisted to `~/.orbt/sessions/session.toml` on shutdown; restored on next start unless `--fresh` / `daemon --no-restore`
 
 ## RELEASE MANAGEMENT
 
@@ -160,4 +165,4 @@ All release planning, channel status, version history, and release todos are mai
 
 **`/home/linus/dev/00_orbit/03_release/RELEASE_STATUS.md`** -- single canonical source for release work.
 
-Current public release is **v0.1.11** (2026-07-28). Channels: GitHub Releases, install.sh, crates.io (`orbt`/`orbt-protocol`/`orbt-core`), Homebrew tap, apt (apt.orbt.sh), AUR (`orbt-bin`/`orbt`/`orbit`), Scoop, winget (PR #404264 pending review), Nix flake. See RELEASE_STATUS.md for full channel details, pending issues, and version history.
+Current public release is **v0.2.0** (2026-10-07). Channels: GitHub Releases, install.sh, crates.io (`orbt`/`orbt-protocol`/`orbt-core`), Homebrew tap, apt (apt.orbt.sh), AUR (`orbt-bin`/`orbt`/`orbit`), Scoop, winget (PR #404264 pending review), Nix flake. See RELEASE_STATUS.md for full channel details, pending issues, and version history.
