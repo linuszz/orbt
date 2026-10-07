@@ -5,7 +5,7 @@ members = [
     "crates/orbt-protocol",
     "crates/orbt-core",
     "crates/orbit-alias",
-    # "crates/orbit-plugin",  # Phase 4 (Mars): WASM plugin runtime. Uncomment when activating.
+    "crates/orbit-plugin",
 ]
 exclude = ["tools"]
 
