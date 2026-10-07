@@ -175,19 +175,58 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ));
     }
 
+    let (local_h, local_m, utc_h, utc_m) = clock_hm();
+    spans.push(Span::styled(" | ", Style::default().fg(border())));
+    spans.push(Span::styled(
+        format!("{local_h:02}:{local_m:02}"),
+        Style::default().fg(fg_secondary()),
+    ));
+    // The status bar is a single unmeasured line, so anything past the right
+    // edge is simply gone — and the clock sits at the end of it. Give the UTC
+    // half up before the clock itself is what the sidebar squeezes off screen.
+    let utc = format!(" · {utc_h:02}:{utc_m:02} UTC");
+    let used: usize = spans.iter().map(|s| s.width()).sum();
+    if used + unicode_width::UnicodeWidthStr::width(utc.as_str()) <= area.width as usize {
+        spans.push(Span::styled(utc, Style::default().fg(fg_muted())));
+    }
+
+    let line = Line::from(spans);
+    frame.render_widget(line, area);
+}
+
+/// Fill `tm` with the local-zone breakdown of `secs`. `localtime_r` on unix,
+/// `localtime_s` on Windows — the same conversion with swapped arguments and a
+/// different return convention.
+#[cfg(unix)]
+fn localtime_into(secs: libc::time_t, tm: &mut libc::tm) -> bool {
+    unsafe { !libc::localtime_r(&secs, tm).is_null() }
+}
+
+#[cfg(windows)]
+fn localtime_into(secs: libc::time_t, tm: &mut libc::tm) -> bool {
+    unsafe { libc::localtime_s(tm, &secs) == 0 }
+}
+
+/// Hours and minutes for the local zone and for UTC, as `(lh, lm, uh, um)`.
+///
+/// The local half goes through the platform's own conversion so the offset and
+/// daylight saving come from the system rather than a hand-rolled guess. A
+/// machine with no usable zone database falls back to UTC, which is what the
+/// clock showed before this read the local zone at all.
+fn clock_hm() -> (u8, u8, u8, u8) {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    let hh = (secs / 3600 % 24) as u8;
-    let mm = (secs / 60 % 60) as u8;
-    spans.push(Span::styled(
-        format!(" | {hh:02}:{mm:02}"),
-        Style::default().fg(fg_muted()),
-    ));
-
-    let line = Line::from(spans);
-    frame.render_widget(line, area);
+    let (utc_h, utc_m) = ((secs / 3600 % 24) as u8, (secs / 60 % 60) as u8);
+    // A `tm` is a plain C struct of integers and one pointer, so an all-zero
+    // bit pattern is a valid value for the platform call to overwrite.
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    if localtime_into(secs as libc::time_t, &mut tm) {
+        (tm.tm_hour as u8, tm.tm_min as u8, utc_h, utc_m)
+    } else {
+        (utc_h, utc_m, utc_h, utc_m)
+    }
 }
 
 use ratatui::widgets::Block;
