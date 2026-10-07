@@ -20,7 +20,7 @@ impl WasmRuntime {
     ) -> Result<Box<dyn Plugin>, PluginError> {
         #[cfg(feature = "wasm")]
         {
-            unimplemented!("WASM runtime requires wasmtime")
+            unimplemented!("WASM runtime requires wasmtime dependency")
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -28,5 +28,11 @@ impl WasmRuntime {
                 "WASM runtime not enabled (feature = \"wasm\")".to_string(),
             ))
         }
+    }
+}
+
+impl Default for WasmRuntime {
+    fn default() -> Self {
+        Self::new()
     }
 }
