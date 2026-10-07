@@ -15,6 +15,7 @@ pub mod runtime;
 pub mod dispatch;
 pub mod render;
 pub mod export;
+pub mod config;
 
 pub use error::{PluginError, LoadError, UpgradeError};
 pub use types::{PluginId, SurfaceId, SubscriptionId, ContextId, Version};
@@ -28,4 +29,5 @@ pub use surface::{SurfaceDecl, SurfaceKind, SurfaceHandle, SurfaceEvent, Size, R
 pub use capability::{CapabilityDecl, CapabilityName, Scope, CapabilityGrant};
 pub use store::{Store, StoreApi};
 pub use bus::{Bus, BusMessage};
+pub use config::{PluginConfig, PluginConfigManager};
 pub use runtime::{WasmRuntime, NativeRuntime, NativeThreadPool, PLUGIN_ABI_VERSION};

@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod io;
 pub mod ipc;
+pub mod plugin_surfaces;
 pub mod pty;
 pub mod session;
 pub mod snapshot;

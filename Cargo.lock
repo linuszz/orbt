@@ -2337,6 +2337,7 @@ dependencies = [
  "image",
  "interprocess",
  "libc",
+ "orbit-plugin",
  "orbt-core",
  "orbt-protocol",
  "portable-pty",
