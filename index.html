@@ -1,0 +1,14 @@
+<!DOCTYPE html>
+<html>
+<head><title>Orbt apt repository</title></head>
+<body>
+<h1>Orbt apt repository</h1>
+<pre>
+# Install
+curl -fsSL https://apt.orbt.sh/orbt.gpg.pub | sudo gpg --dearmor -o /usr/share/keyrings/orbt.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/orbt.gpg] https://apt.orbt.sh stable main" \
+  | sudo tee /etc/apt/sources.list.d/orbt.list
+sudo apt update && sudo apt install orbt
+</pre>
+</body>
+</html>

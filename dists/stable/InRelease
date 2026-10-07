@@ -1,0 +1,44 @@
+-----BEGIN PGP SIGNED MESSAGE-----
+Hash: SHA512
+
+Origin: Orbt
+Label: Orbt
+Suite: stable
+Codename: stable
+Architectures: amd64
+Components: main
+Description: Orbt terminal workspace apt repository
+Date: Wed, 07 Oct 2026 10:01:00 +0000
+MD5Sum:
+ cabee84765c01ce830d1fdde7043c3aa              146 Release
+ 8d95fbbae3d7893d073516affcde669a              566 main/binary-amd64/Packages
+ d46627f35414ab12b569eb2a51a89e94              440 main/binary-amd64/Packages.gz
+SHA1:
+ 456b5c9c634a8b359a81edad98f57c46b7f4b172              146 Release
+ 0cbf606515856e6ed9eed0d9d94e49bed7e70c4a              566 main/binary-amd64/Packages
+ 80eddae525cb03bc5241bb3abd59bc55f25e34bb              440 main/binary-amd64/Packages.gz
+SHA256:
+ 51ccf2439d96155f00a092370efdb8d9ddc6ab26465140e2a09a4d6d4d152322              146 Release
+ b3d378019e605ad71986589dd80c950fe629312b3e30c17a8087889ce6b1a445              566 main/binary-amd64/Packages
+ 21bd8f3970a3a5f7b3766de0a723c6b87ef67fe396a36518ea0cc4574bdc889b              440 main/binary-amd64/Packages.gz
+SHA512:
+ 21b0198d63be6c62c1c3cae0360d22f11d0ee052c4d76a8b725abed42a44e0b580172e12a666e179446fe24110068658a69d4e71cbd99e9e224a79cd07cdf216              146 Release
+ 87d176b740209b3ed0d8beb81cd155ed153ca48be23ba24a6ff981da641ef32bda8196f241ce99d6dba0802e38b4c4a6b392f38fedea649cbbc270d2b729dd37              566 main/binary-amd64/Packages
+ ef4e5bc6a58fd1bc0712330d7cad6cd868d5f9b10bc0ada8b405ec23d5c2c044fee73f131e033ab279f1431f8481dba45122e3baf503ac84254231d753411e65              440 main/binary-amd64/Packages.gz
+-----BEGIN PGP SIGNATURE-----
+
+iQI/BAEBCgApFiEEkTA4IM8Gca5qyaUjvfroKPGZGrAFAmrGGFwLHGpoQG9yYnQu
+c2gACgkQvfroKPGZGrDC9BAAqRH6InvkAT7NfPpEu4VBRuHSgMOKFutoCcY4ABhI
+tiqYlIFVpyWAVxKJKLXBbku60s2GTZkxecumdjS7wMt9DMZE3qDxA3x8VPp29H2V
+KuIHGkPzx8P2Dk9zak8WIaHIBwmVUqEQOETGDfeLnbNT2brT5UbDnxHrjmcuCKhZ
+M/21OH4OyNWCtZz9IHpqCUBxyhruErT5xnGpEG050sYdIh3r69H7sUnifAWw6Qdm
+589lAG/IBouCPOkYHoXbmPkYZufyI7NgAO1zjjh7qS6iE6+r/HDyqvZdxuch/H06
+joRHnjh4k2BMx9mbgD4tfincKBxUrnNSHQZ+XwKjVRGGL31nAHSd8dMiRzLbeDT0
+WTurRsrOo6LtiR0Zu8KfSqGa9Kl4ai4n7gygXbskHf2t9P8RdKvONSfS7iVHpJS+
+BLmLVqjECPpbwsUFFQJftOfvxJ9AwDZb9TC2R03J1v4PGDQ3UpsNTfC76/WRlNd6
+ukUomFOcKAvNYtxBATd/XbWKEFwMXZAgGOHmLQ0uMYOZiBsDcNhIXh32p7VfDIz6
+nV2OAtzkkWppFRUH1zUQSReAyw90XlAmlaei2Jmnsibft+fhu3uCs094FruSLBS5
+dkSrwjT/YBssThH0LrGY6y0Cg7D2BuEB+JPpW7cS4ZaczJOe7aGHWB1aJRV//bRa
+3oU=
+=x6FQ
+-----END PGP SIGNATURE-----

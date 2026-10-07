@@ -1,0 +1,17 @@
+Package: orbt
+Version: 0.2.0
+Architecture: amd64
+Maintainer: Linus <jh@orbt.sh>
+Depends: libc6 (>= 2.17)
+Filename: pool/main/orbt_0.2.0_amd64.deb
+Size: 2529186
+MD5sum: b8d6c6340ce520022d68944c0e18d96c
+SHA1: 7b5b53c93bce373d9330c5fe916b49fd9e473452
+SHA256: 614faa2771b52f92b3cab98c6f8a1dcaf2d509560f0e41a564de743bf45caecc
+Section: utils
+Priority: optional
+Homepage: https://github.com/linuszz/orbt
+Description: Universal terminal workspace
+ Orbt is a terminal multiplexer with first-class AI agent runtime.
+ Run orbt to start the TUI; sessions persist after detach.
+
