@@ -817,6 +817,14 @@ pub struct App {
     pub animations_enabled: bool,
     pub settings_open: bool,
     pub settings_selected: usize,
+    /// Active tab in settings: 0 = General, 1 = Plugins.
+    pub settings_tab: usize,
+    /// Plugin list scroll offset in Plugins tab.
+    pub settings_plugin_scroll: usize,
+    /// Selected plugin index in Plugins tab.
+    pub settings_plugin_selected: usize,
+    /// Loaded plugin configurations (plugin_id -> config).
+    pub plugin_configs: std::collections::HashMap<String, orbit_plugin::PluginConfig>,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
     /// events.rs drains this and injects the path as PTY input.
     pub pending_payload_path: Option<String>,
@@ -1044,6 +1052,10 @@ impl App {
             animations_enabled: true,
             settings_open: false,
             settings_selected: 0,
+            settings_tab: 0,
+            settings_plugin_scroll: 0,
+            settings_plugin_selected: 0,
+            plugin_configs: std::collections::HashMap::new(),
             pending_payload_path: None,
             mobile_mode: cols < 80 || rows < 25,
             mobile_view: MobileView::Terminal,
