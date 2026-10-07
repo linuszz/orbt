@@ -20,11 +20,13 @@ regex = { workspace = true }
 toml = { workspace = true }
 semver = { version = "1", features = ["serde"] }
 bytes = "1"
+libloading = { workspace = true, optional = true }
+wasmtime = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile = "3"
 
 [features]
 default = []
-wasm = []
-native = []
+wasm = ["dep:wasmtime"]
+native = ["dep:libloading"]

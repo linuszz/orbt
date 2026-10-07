@@ -69,6 +69,7 @@ russh = { version = "0.62", default-features = false, features = ["aws-lc-rs", "
 rpassword = "7"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libloading = "0.8"
+wasmtime = { version = "25", features = ["cranelift", "runtime"] }
 
 # Internal crates (path + version so `cargo publish` resolves from crates.io)
 orbt-protocol = { path = "crates/orbt-protocol", version = "0.2" }
