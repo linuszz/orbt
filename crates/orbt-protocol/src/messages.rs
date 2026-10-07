@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 9; // was 8; MovePane + PaneDropPos for drag reorder
+pub const PROTOCOL_VERSION: u32 = 10; // was 9; ServerEvent::SurfaceFrame for plugin system
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -17,6 +17,9 @@ pub struct Capabilities {
     /// Daemon populates context_percent, compaction_count, agent_cli, turn_count on AgentDetail/AcpDetail.
     #[serde(default)]
     pub agent_context_stats: bool,
+    /// Client accepts plugin surface frames (ServerEvent::SurfaceFrame).
+    #[serde(default)]
+    pub plugin_surfaces: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,5 +221,14 @@ pub enum ServerEvent {
     // Phase 3: the uploaded payload is now available at `path` on the orbtd host.
     PayloadReady {
         path: String,
+    },
+
+    // Phase 4: plugin surface frame update.
+    SurfaceFrame {
+        surface_id: u64,
+        plugin_id: String,
+        width: u16,
+        height: u16,
+        cells: Vec<crate::Cell>,
     },
 }
