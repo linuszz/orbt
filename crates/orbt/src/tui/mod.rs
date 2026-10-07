@@ -1001,6 +1001,49 @@ pub fn strip_scroll_step(
     target.unwrap_or(scroll).min(max)
 }
 
+/// Peek the viewport one column without changing the focus. This mirrors the
+/// keyboard pane-cycle distance: it shifts by the least amount that brings the
+/// next partially-hidden column fully into view, rather than snapping to the
+/// next column boundary. Same duration (`SCROLL_ANIM_TICKS`) as every other
+/// strip glide, so the edge-tab click feels identical to arrow navigation.
+pub fn peek_strip_scroll(
+    columns: &[StripColumn],
+    column_width: u16,
+    area_width: u16,
+    scroll: usize,
+    forward: bool,
+) -> usize {
+    let widths = column_widths(columns, column_width, area_width);
+    let viewport = area_width.max(1) as usize;
+    let max_scroll = widths
+        .iter()
+        .map(|&w| w as usize)
+        .sum::<usize>()
+        .saturating_sub(viewport);
+    let scroll = scroll.min(max_scroll);
+    let mut x = 0usize;
+    if forward {
+        let view_right = scroll + viewport;
+        for w in &widths {
+            let right = x + *w as usize;
+            if right > view_right {
+                return (right.saturating_sub(viewport)).min(max_scroll);
+            }
+            x = right;
+        }
+        max_scroll
+    } else {
+        let mut last = None;
+        for w in &widths {
+            if x < scroll {
+                last = Some(x);
+            }
+            x += *w as usize;
+        }
+        last.unwrap_or(0).min(max_scroll)
+    }
+}
+
 /// Where the edge tabs sit: one three-cell notch per pane whose frame forms
 /// the band's left edge (when columns hide off-screen that way) and likewise
 /// on the right. A stacked edge column therefore gets one tab per pane, each
@@ -2437,6 +2480,25 @@ mod tests {
             "next edge 90 clamps to max 30"
         );
         assert_eq!(strip_scroll_step(&columns, 0, 120, 30, false), 0);
+    }
+
+    #[test]
+    fn peek_scroll_uses_minimum_distance_like_arrow_keys() {
+        let columns: Vec<StripColumn> =
+            (1..=4u32).map(|i| StripColumn::single(PaneId(i))).collect();
+        // Four 60-wide columns, viewport 120, max scroll 120.
+        // Forward from 0: columns 1+2 fully visible, column 3 starts at the
+        // right edge; peek just enough to bring it flush: scroll = 60.
+        assert_eq!(peek_strip_scroll(&columns, 0, 120, 0, true), 60);
+        // Back from 60: column 1 [0,60) is off-screen left, so peek snaps
+        // fully to the left: 0.
+        assert_eq!(peek_strip_scroll(&columns, 0, 120, 60, false), 0);
+        // Forward from mid-viewport (30): column 3 is only partially visible,
+        // peek shifts the minimum (30) to make it flush at scroll 60.
+        assert_eq!(peek_strip_scroll(&columns, 0, 120, 30, true), 60);
+        // Clamped at the ends.
+        assert_eq!(peek_strip_scroll(&columns, 0, 120, 120, true), 120);
+        assert_eq!(peek_strip_scroll(&columns, 0, 120, 0, false), 0);
     }
 
     #[test]

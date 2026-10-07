@@ -73,8 +73,9 @@ fn content_area(term_size: ratatui::layout::Rect, app: &App) -> ratatui::layout:
     compute_pane_area(term_size.width, term_size.height, app)
 }
 
-/// Step the viewport one column without moving the focus. The resolve keeps
-/// the focused pane on screen, so state and render stay identical.
+/// Step the viewport one column without moving the focus. The peek distance
+/// matches the keyboard pane-cycle distance (least amount to reveal the next
+/// partially-hidden column), so the animation feels identical to arrow keys.
 fn step_strip_viewport(app: &mut App, area: ratatui::layout::Rect, forward: bool) {
     let rscroll = orbt_tui::tui::rendered_strip_scroll(&app.layout(), area, app);
     if let orbt_protocol::PaneLayout::Strip {
@@ -83,7 +84,7 @@ fn step_strip_viewport(app: &mut App, area: ratatui::layout::Rect, forward: bool
     } = app.pane_tree()
     {
         let raw =
-            orbt_tui::tui::strip_scroll_step(columns, *column_width, area.width, rscroll, forward);
+            orbt_tui::tui::peek_strip_scroll(columns, *column_width, area.width, rscroll, forward);
         // Peek: the viewport may leave the focus. set_strip_scroll anchors the
         // drawing to the raw offset until the focus itself moves.
         app.set_strip_scroll(raw);
