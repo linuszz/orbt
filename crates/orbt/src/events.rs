@@ -989,7 +989,7 @@ async fn handle_key(
     }
 
     if app.settings_open {
-        let num_settings = if app.agent_fleet_enabled { 4 } else { 3 };
+        let num_settings = if app.agent_fleet_enabled { 5 } else { 4 };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
                 app.settings_open = false;
@@ -1029,7 +1029,16 @@ async fn handle_key(
                     app.needs_resize = true;
                     orbt_tui::app::save_settings(app);
                 }
-                3 if app.agent_fleet_enabled => {
+                3 => {
+                    app.animations_enabled = !app.animations_enabled;
+                    if !app.animations_enabled {
+                        app.strip_scroll_anim = None;
+                        app.overview_anim_start = None;
+                        app.pane_open_ticks.clear();
+                    }
+                    orbt_tui::app::save_settings(app);
+                }
+                4 if app.agent_fleet_enabled => {
                     app.agent_panel_mode = app.agent_panel_mode.cycle();
                     orbt_tui::app::save_settings(app);
                 }
@@ -2138,7 +2147,11 @@ async fn handle_strip_nav_tap(
 
         if on(nav.overview_hit) {
             app.show_overview = true;
-            app.overview_anim_start = Some(app.tick_count);
+            app.overview_anim_start = if app.animations_enabled {
+                Some(app.tick_count)
+            } else {
+                None
+            };
             app.needs_redraw = true;
             return true;
         }
@@ -2348,6 +2361,15 @@ async fn handle_mobile_mouse(
                                 if app.active_pane != *pid {
                                     app.converge_strip_scroll_to_screen(pane_area);
                                     app.active_pane = *pid;
+                                    let target = orbt_tui::tui::resolved_strip_scroll(
+                                        &app.layout(),
+                                        pane_area,
+                                        app.visual_scroll(),
+                                        *pid,
+                                    );
+                                    if target != app.strip_scroll {
+                                        app.set_strip_scroll(target);
+                                    }
                                     let _ = writer
                                         .send(ClientMessage::FocusPane {
                                             tab_id: app.active_tab_id,
@@ -3551,10 +3573,17 @@ async fn handle_mouse(
                     && mouse.row >= rect.y
                     && mouse.row < rect.y + rect.height
                 {
-                    // Freeze the viewport on what is drawn, then focus: the
-                    // strip must not move because of a click.
                     app.converge_strip_scroll_to_screen(pane_area);
                     app.active_pane = *pid;
+                    let target = orbt_tui::tui::resolved_strip_scroll(
+                        &app.layout(),
+                        pane_area,
+                        app.visual_scroll(),
+                        *pid,
+                    );
+                    if target != app.strip_scroll {
+                        app.set_strip_scroll(target);
+                    }
                     let _ = writer
                         .send(ClientMessage::FocusPane {
                             tab_id: app.active_tab_id,

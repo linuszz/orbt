@@ -159,6 +159,12 @@ pub struct UserSettings {
     pub agent_last_form: PanelForm,
     #[serde(default)]
     pub layout_mode: LayoutMode,
+    #[serde(default = "default_true")]
+    pub animations_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 impl Default for UserSettings {
@@ -171,6 +177,7 @@ impl Default for UserSettings {
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
             layout_mode: LayoutMode::Strip,
+            animations_enabled: true,
         }
     }
 }
@@ -208,6 +215,7 @@ pub fn save_settings(app: &App) {
         agent_fleet_enabled: app.agent_fleet_enabled,
         agent_last_form: app.last_panel_form,
         layout_mode: app.layout_mode,
+        animations_enabled: app.animations_enabled,
     };
     let path = settings_path();
     if let Some(parent) = path.parent() {
@@ -806,6 +814,7 @@ pub struct App {
     pub agent_fleet_enabled: bool,
     /// Runtime copy of `UserSettings::layout_mode`. Applies to newly created tabs.
     pub layout_mode: LayoutMode,
+    pub animations_enabled: bool,
     pub settings_open: bool,
     pub settings_selected: usize,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
@@ -1032,6 +1041,7 @@ impl App {
             theme_name: "orbt".to_string(),
             agent_fleet_enabled: false,
             layout_mode: LayoutMode::Strip,
+            animations_enabled: true,
             settings_open: false,
             settings_selected: 0,
             pending_payload_path: None,
@@ -1256,7 +1266,7 @@ impl App {
         }
         let from = self.visual_scroll();
         self.strip_scroll = target;
-        if from == target {
+        if from == target || !self.animations_enabled {
             self.strip_scroll_anim = None;
         } else {
             self.strip_scroll_anim = Some(Anim {
@@ -1526,8 +1536,9 @@ impl App {
                             ps.sync_from_server(&pane.cell_grid);
                             ps.title = pane.title.clone();
                             self.panes.insert(pane.id, ps);
-                            // A pane the state never had before grows into place.
-                            self.pane_open_ticks.insert(pane.id, self.tick_count);
+                            if self.animations_enabled {
+                                self.pane_open_ticks.insert(pane.id, self.tick_count);
+                            }
                         }
                     }
                     if let Some(active_tab_info) = s.tabs.iter().find(|t| t.id == s.active_tab) {
@@ -2524,12 +2535,14 @@ pub mod tests {
             agent_fleet_enabled: false,
             agent_last_form: PanelForm::Sidebar,
             layout_mode: LayoutMode::Strip,
+            animations_enabled: true,
         };
         let toml_str = toml::to_string(&settings).unwrap();
         let restored: UserSettings = toml::from_str(&toml_str).unwrap();
         assert_eq!(restored.theme, "orange");
         assert!(!restored.sidebar_visible);
         assert_eq!(restored.agent_panel_mode, AgentPanelMode::Sidebar);
+        assert!(restored.animations_enabled);
     }
 
     #[test]

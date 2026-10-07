@@ -220,6 +220,7 @@ async fn main() -> Result<()> {
         app.agent_fleet_enabled = settings.agent_fleet_enabled;
         app.agent_panel_mode = settings.agent_panel_mode;
         app.layout_mode = settings.layout_mode;
+        app.animations_enabled = settings.animations_enabled;
         orbt_tui::tui::theme::set_theme(&app.theme_name);
 
         let pane_area = ratatui::layout::Rect {

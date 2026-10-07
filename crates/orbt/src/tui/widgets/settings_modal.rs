@@ -20,9 +20,9 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     // Dynamic height: when fleet enabled, include satellites section; otherwise compact.
     let modal_h = if app.agent_fleet_enabled {
         let satellite_rows = app.agents.len().max(1) as u16;
-        (14 + satellite_rows).min(area.height.saturating_sub(4))
+        (16 + satellite_rows).min(area.height.saturating_sub(4))
     } else {
-        8u16.min(area.height.saturating_sub(4))
+        9u16.min(area.height.saturating_sub(4))
     };
     let x = area.x + area.width.saturating_sub(modal_w) / 2;
     let y = area.y + area.height.saturating_sub(modal_h) / 2;
@@ -80,6 +80,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         ("Theme", theme_display),
         ("Sidebar", sidebar_display.to_string()),
         ("Layout", layout_display.to_string()),
+        (
+            "Animations",
+            if app.animations_enabled { "On" } else { "Off" }.to_string(),
+        ),
     ];
     if app.agent_fleet_enabled {
         rows.push(("Agent Panel", agent_display.to_string()));
