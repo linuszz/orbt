@@ -1822,11 +1822,11 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "orbit"
-version = "0.1.11"
+version = "0.2.0"
 
 [[package]]
 name = "orbt"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -1855,7 +1855,7 @@ dependencies = [
 
 [[package]]
 name = "orbt-core"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "orbt-protocol",
  "regex",
@@ -1868,7 +1868,7 @@ dependencies = [
 
 [[package]]
 name = "orbt-protocol"
-version = "0.1.11"
+version = "0.2.0"
 dependencies = [
  "bincode",
  "libc",

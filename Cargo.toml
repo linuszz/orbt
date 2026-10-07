@@ -10,7 +10,7 @@ members = [
 exclude = ["tools"]
 
 [workspace.package]
-version = "0.1.11"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.75"
 license = "AGPL-3.0-only"
@@ -70,8 +70,8 @@ rpassword = "7"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Internal crates (path + version so `cargo publish` resolves from crates.io)
-orbt-protocol = { path = "crates/orbt-protocol", version = "0.1" }
-orbt-core = { path = "crates/orbt-core", version = "0.1" }
+orbt-protocol = { path = "crates/orbt-protocol", version = "0.2" }
+orbt-core = { path = "crates/orbt-core", version = "0.2" }
 
 
 [profile.release]
