@@ -2800,6 +2800,7 @@ async fn handle_mobile_mouse(
                             pane_id: dragged,
                         })
                         .await;
+                    app.strip_scroll_anchor = target;
                     app.needs_redraw = true;
                 }
             }
@@ -3496,24 +3497,13 @@ async fn handle_mouse(
                     return;
                 }
             }
-            // A lower pane's top border IS the split line, so this check comes
-            // after the buttons: a click on a control must not arm a drag.
-            if app.zoomed_pane.is_none() {
-                if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
-                    app.pane_tree(),
-                    pane_area,
-                    mouse.column,
-                    mouse.row,
-                    app.active_pane,
-                ) {
-                    app.drag_split = Some((first_pane, second_pane, dir, -1.0));
-                    app.selection = None;
-                    return;
-                }
-            }
             // Title-bar press in strip mode arms a reorder drag. The pane
             // takes focus immediately; click vs drag is decided by whether a
-            // Drag event arrives before the release.
+            // Drag event arrives before the release. This comes before the
+            // split-edge check on purpose: a stacked pane's title row doubles
+            // as the stack's divider, and that divider has no resize state
+            // behind it, so arming a resize there produced a dead drag and
+            // made the pane immovable. The title belongs to the pane.
             if app.zoomed_pane.is_none() && app.pane_tree().is_strip() {
                 for (pid, rect) in &areas {
                     let on_title = mouse.row == rect.y
@@ -3534,6 +3524,25 @@ async fn handle_mouse(
                         app.needs_redraw = true;
                         return;
                     }
+                }
+            }
+            // A lower pane's top border IS the split line, so this check comes
+            // after the buttons: a click on a control must not arm a drag.
+            if app.zoomed_pane.is_none() {
+                if let Some((first_pane, second_pane, dir)) = orbt_tui::tui::find_split_at_cursor(
+                    app.pane_tree(),
+                    pane_area,
+                    mouse.column,
+                    mouse.row,
+                    app.active_pane,
+                ) {
+                    // Bake the rendered scroll before arming: strip width
+                    // math measures against it, and a re-resolving scroll
+                    // turns the width computation into a feedback loop.
+                    app.converge_strip_scroll_to_screen(pane_area);
+                    app.drag_split = Some((first_pane, second_pane, dir, -1.0));
+                    app.selection = None;
+                    return;
                 }
             }
             for (pid, rect) in &areas {
@@ -3933,6 +3942,7 @@ async fn handle_mouse(
                             pane_id: dragged,
                         })
                         .await;
+                    app.strip_scroll_anchor = target;
                     app.needs_redraw = true;
                 }
             }

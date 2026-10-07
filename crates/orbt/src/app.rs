@@ -1236,7 +1236,10 @@ impl App {
             return;
         }
         let target = crate::tui::rendered_strip_scroll(&self.layout(), area, self);
-        self.set_strip_scroll(target);
+        // Bake, never glide: the screen already shows `target`.
+        self.strip_scroll = target;
+        self.strip_scroll_anim = None;
+        self.strip_scroll_anchor = self.active_pane;
     }
 
     /// Glide the strip to `target`. A repeated call with the same target keeps
@@ -1897,6 +1900,56 @@ pub mod tests {
             to: 2.0,
         };
         assert_eq!(instant.value_at(0), None);
+    }
+
+    #[test]
+    fn converge_bakes_the_drawn_offset_without_a_jump_back_glide() {
+        let mut app = make_test_app(140, 30);
+        app.tick_count = 10;
+        // Mixed widths 88/44/88/44 over a 176 band: total 264, max scroll 88.
+        let tree = &mut app.tabs[0].pane_tree;
+        let mut columns: Vec<orbt_protocol::StripColumn> = (1..=4u32)
+            .map(|i| orbt_protocol::StripColumn::single(PaneId(i)))
+            .collect();
+        columns[0].width = 0.5;
+        columns[1].width = 0.25;
+        columns[2].width = 0.5;
+        columns[3].width = 0.25;
+        *tree = orbt_protocol::PaneLayout::Strip {
+            columns,
+            column_width: 0,
+        };
+        app.active_pane = PaneId(4);
+        let band = ratatui::layout::Rect {
+            x: 0,
+            y: 1,
+            width: 176,
+            height: 26,
+        };
+        // State sits at 0 while the drawing resolves to pane 4 at 88: the
+        // divergence every split or resize leaves behind, guaranteed with
+        // mixed column widths.
+        app.strip_scroll = 0;
+        assert_eq!(
+            crate::tui::rendered_strip_scroll(&app.layout(), band, &app),
+            88,
+            "render resolves state 0 up to the focused pane"
+        );
+        // Converging (every pointer gesture does this before touching the
+        // focus) must freeze the view where it is: baking the drawn offset,
+        // not gliding to it from the stale state — a glide would jump the
+        // viewport back to 0 for several frames.
+        app.converge_strip_scroll_to_screen(band);
+        assert_eq!(app.visual_scroll(), 88, "bakes the drawn offset at once");
+        assert!(app.strip_scroll_anim.is_none(), "no jump-back glide");
+        // The click this convergence prepares for: pane 3 is fully visible
+        // at 88, so focusing it must not move the viewport either.
+        app.active_pane = PaneId(3);
+        assert_eq!(
+            crate::tui::rendered_strip_scroll(&app.layout(), band, &app),
+            88,
+            "clicking a fully-visible pane keeps the band where it was"
+        );
     }
 
     #[test]
