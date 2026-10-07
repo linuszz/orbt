@@ -1,0 +1,14 @@
+PackageIdentifier: Linus.Orbt
+PackageVersion: 0.2.0
+MinimumOSVersion: 10.0.17763.0
+InstallerType: zip
+NestedInstallerType: portable
+NestedInstallerFiles:
+  - RelativeFilePath: orbt.exe
+    PortableCommandAlias: orbt
+Installers:
+  - Architecture: x64
+    InstallerUrl: https://github.com/linuszz/orbt/releases/download/v0.2.0/orbt-windows-x86_64.zip
+    InstallerSha256: 893849c2c2a5e9365a97f07fbd4491772b8935024c69d09baa6b15503bfd0eb3
+ManifestType: installer
+ManifestVersion: 1.6.0
