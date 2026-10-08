@@ -14,10 +14,10 @@ pub struct InitContext<'a> {
 }
 
 impl<'a> InitContext<'a> {
-    pub fn declare_surface(&mut self, decl: SurfaceDecl) -> Result<(), PluginError> {
+    pub fn declare_surface(&mut self, decl: SurfaceDecl) -> Result<SurfaceId, PluginError> {
         let id = SurfaceId(self.surfaces.len() as u64);
         self.surfaces.insert(id, Surface { id, decl });
-        Ok(())
+        Ok(id)
     }
 
     pub fn subscribe(&mut self, spec: HookSpec) -> Result<SubscriptionId, PluginError> {

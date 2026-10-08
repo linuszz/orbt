@@ -6,6 +6,7 @@ members = [
     "crates/orbt-core",
     "crates/orbit-alias",
     "crates/orbit-plugin",
+    "crates/orbit-agent-acp",
 ]
 exclude = ["tools"]
 
@@ -75,6 +76,7 @@ wasmtime = { version = "25", features = ["cranelift", "runtime"] }
 orbt-protocol = { path = "crates/orbt-protocol", version = "0.2" }
 orbt-core = { path = "crates/orbt-core", version = "0.2" }
 orbit-plugin = { path = "crates/orbit-plugin", version = "0.2" }
+orbit-agent-acp = { path = "crates/orbit-agent-acp", version = "0.2" }
 
 
 [profile.release]

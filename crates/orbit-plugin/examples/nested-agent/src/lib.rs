@@ -1,6 +1,6 @@
-use orbit_plugin::prelude::*;
+use orbit_agent_acp::{AcpClient, AcpClientConfig, AcpEvent};
 use orbit_plugin::export_plugin;
-use orbit_plugin::pi_client::{PiClient, PiConfig, PiEvent, PiMessage};
+use orbit_plugin::prelude::*;
 use std::collections::VecDeque;
 
 const MAX_MESSAGES: usize = 100;
@@ -8,12 +8,12 @@ const SURFACE_WIDTH: u16 = 44;
 const SURFACE_HEIGHT: u16 = 20;
 
 struct NestedAgentPlugin {
-    pi_client: Option<PiClient>,
+    acp_client: Option<AcpClient>,
+    session_id: Option<String>,
     messages: VecDeque<ChatMessage>,
     input_buffer: String,
     surface_id: Option<SurfaceId>,
     status: AgentStatus,
-    config: NestedAgentConfig,
 }
 
 #[derive(Debug, Clone)]
@@ -36,44 +36,19 @@ enum AgentStatus {
     Error,
 }
 
-#[derive(Debug, Clone)]
-struct NestedAgentConfig {
-    provider: String,
-    model: String,
-    thinking_level: String,
-    max_tokens: u32,
-    workspace: String,
-}
-
-impl Default for NestedAgentConfig {
-    fn default() -> Self {
-        Self {
-            provider: "anthropic".to_string(),
-            model: "claude-sonnet-4-20250514".to_string(),
-            thinking_level: "medium".to_string(),
-            max_tokens: 16384,
-            workspace: ".".to_string(),
-        }
-    }
-}
-
 impl Plugin for NestedAgentPlugin {
     fn new() -> Self {
         Self {
-            pi_client: None,
+            acp_client: None,
+            session_id: None,
             messages: VecDeque::new(),
             input_buffer: String::new(),
             surface_id: None,
             status: AgentStatus::Idle,
-            config: NestedAgentConfig::default(),
         }
     }
 
     fn init(&mut self, ctx: &mut InitContext) -> Result<(), PluginError> {
-        // Load config from plugin config
-        self.config = load_config(ctx);
-        
-        // Declare plugin-dock surface
         let surface_id = ctx.declare_surface(SurfaceDecl {
             kind: SurfaceKind::PluginDock,
             id: "nested-agent-dock".to_string(),
@@ -85,7 +60,6 @@ impl Plugin for NestedAgentPlugin {
         })?;
         self.surface_id = Some(surface_id);
 
-        // Subscribe to agent state events
         ctx.subscribe(HookSpec {
             topic: HookTopic::AgentState,
             filter: None,
@@ -95,7 +69,6 @@ impl Plugin for NestedAgentPlugin {
             priority: 50,
         })?;
 
-        // Declare commands
         ctx.declare_command_used(CommandName("agent.list".into()))?;
         ctx.declare_command_provided(CommandProvidedDecl {
             name: "nested-agent.intercept".to_string(),
@@ -109,7 +82,6 @@ impl Plugin for NestedAgentPlugin {
             })),
         })?;
 
-        // Add system message
         self.messages.push_back(ChatMessage {
             role: MessageRole::System,
             content: "Nested Agent ready. Type a message to start.".to_string(),
@@ -137,7 +109,7 @@ impl Plugin for NestedAgentPlugin {
                         name: cmd_name.into(),
                         detail: "missing 'message' field".to_string(),
                     })?;
-                
+
                 self.handle_user_message(ctx, message);
                 Ok(Some(serde_json::json!({"status": "sent"})))
             }
@@ -169,77 +141,170 @@ impl Plugin for NestedAgentPlugin {
     }
 
     fn on_deactivate(&mut self, _ctx: &mut RuntimeContext) {
-        if let Some(mut client) = self.pi_client.take() {
-            let _ = client.shutdown();
-        }
+        self.cleanup();
     }
 
     fn shutdown(&mut self) {
-        if let Some(mut client) = self.pi_client.take() {
-            let _ = client.shutdown();
-        }
+        self.cleanup();
     }
 }
 
 impl NestedAgentPlugin {
+    fn cleanup(&mut self) {
+        if let Some(mut client) = self.acp_client.take() {
+            let _ = client.shutdown();
+        }
+        self.session_id = None;
+    }
+
     fn handle_user_message(&mut self, ctx: &mut RuntimeContext, message: &str) {
         self.messages.push_back(ChatMessage {
             role: MessageRole::User,
             content: message.to_string(),
         });
-        
+
         if self.messages.len() > MAX_MESSAGES {
             self.messages.pop_front();
         }
 
-        // Start PI if not running
-        if self.pi_client.is_none() {
-            self.start_pi(ctx);
+        if self.acp_client.is_none() {
+            self.start_acp(ctx);
         }
 
-        // Send to PI
-        if let Some(client) = &mut self.pi_client {
-            if let Err(e) = client.send_prompt(message) {
-                self.messages.push_back(ChatMessage {
-                    role: MessageRole::System,
-                    content: format!("Error sending to PI: {}", e),
-                });
-                self.status = AgentStatus::Error;
-            } else {
-                self.status = AgentStatus::Running;
+        if let (Some(client), Some(session_id)) = (&mut self.acp_client, &self.session_id) {
+            let rt = tokio::runtime::Runtime::new().unwrap();
+            match rt.block_on(client.prompt(session_id, message)) {
+                Ok(_) => {
+                    self.status = AgentStatus::Running;
+                    self.poll_events(ctx);
+                }
+                Err(e) => {
+                    self.messages.push_back(ChatMessage {
+                        role: MessageRole::System,
+                        content: format!("Error sending to agent: {}", e),
+                    });
+                    self.status = AgentStatus::Error;
+                }
             }
         }
 
         self.render(ctx);
     }
 
-    fn start_pi(&mut self, _ctx: &mut RuntimeContext) {
-        let config = PiConfig {
-            provider: Some(self.config.provider.clone()),
-            model: Some(self.config.model.clone()),
-            thinking_level: Some(self.config.thinking_level.clone()),
-            session_name: Some("orbit-nested-agent".to_string()),
-            no_session: true,
-            cwd: Some(self.config.workspace.clone()),
-            api_key: None,
+    fn start_acp(&mut self, _ctx: &mut RuntimeContext) {
+        let config = AcpClientConfig {
+            command: "opencode".to_string(),
+            args: vec!["acp".to_string()],
+            cwd: Some(".".to_string()),
+            env: Vec::new(),
         };
 
-        match PiClient::spawn(config) {
-            Ok(mut client) => {
-                client.add_event_listener(|event| {
-                    // Handle PI events in a real implementation
-                    // This would need a channel to communicate back to the plugin
-                });
-                self.pi_client = Some(client);
-                self.status = AgentStatus::Idle;
-            }
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        match rt.block_on(AcpClient::spawn(config)) {
+            Ok(mut client) => match rt.block_on(client.initialize()) {
+                Ok(_) => match rt.block_on(client.new_session(None)) {
+                    Ok(session_id) => {
+                        self.acp_client = Some(client);
+                        self.session_id = Some(session_id);
+                        self.status = AgentStatus::Idle;
+                    }
+                    Err(e) => {
+                        self.messages.push_back(ChatMessage {
+                            role: MessageRole::System,
+                            content: format!("Failed to create session: {}", e),
+                        });
+                        self.status = AgentStatus::Error;
+                    }
+                },
+                Err(e) => {
+                    self.messages.push_back(ChatMessage {
+                        role: MessageRole::System,
+                        content: format!("Failed to initialize ACP: {}", e),
+                    });
+                    self.status = AgentStatus::Error;
+                }
+            },
             Err(e) => {
                 self.messages.push_back(ChatMessage {
                     role: MessageRole::System,
-                    content: format!("Failed to start PI: {}", e),
+                    content: format!("Failed to start OpenCode: {}", e),
                 });
                 self.status = AgentStatus::Error;
             }
+        }
+    }
+
+    fn poll_events(&mut self, ctx: &mut RuntimeContext) {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        
+        loop {
+            let (client, session_id) = match (&mut self.acp_client, &self.session_id) {
+                (Some(c), Some(s)) => (c, s),
+                _ => break,
+            };
+
+            let event = rt.block_on(async {
+                tokio::time::timeout(std::time::Duration::from_millis(100), client.next_event())
+                    .await
+                    .ok()
+                    .flatten()
+            });
+
+            match event {
+                Some(AcpEvent::SessionUpdate { update, .. }) => {
+                    match update {
+                        orbit_agent_acp::SessionUpdate::AgentMessageChunk(chunk) => {
+                            if let orbit_agent_acp::ContentBlock::Text { text } = chunk.content {
+                                self.append_assistant_text(&text);
+                            }
+                        }
+                        orbit_agent_acp::SessionUpdate::AgentMessage(msg) => {
+                            if let Some(content) = msg.content {
+                                let text: String = content
+                                    .iter()
+                                    .filter_map(|c| {
+                                        if let orbit_agent_acp::ContentBlock::Text { text } = c {
+                                            Some(text.clone())
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("");
+                                if !text.is_empty() {
+                                    self.append_assistant_text(&text);
+                                }
+                            }
+                        }
+                        orbit_agent_acp::SessionUpdate::ToolCall(tool_call) => {
+                            self.messages.push_back(ChatMessage {
+                                role: MessageRole::System,
+                                content: format!("[tool] {}", tool_call.title),
+                            });
+                        }
+                        _ => {}
+                    }
+                    self.render(ctx);
+                }
+                Some(_) => {}
+                None => break,
+            }
+        }
+    }
+
+    fn append_assistant_text(&mut self, text: &str) {
+        if let Some(last) = self.messages.back_mut() {
+            if last.role == MessageRole::Assistant {
+                last.content.push_str(text);
+                return;
+            }
+        }
+        self.messages.push_back(ChatMessage {
+            role: MessageRole::Assistant,
+            content: text.to_string(),
+        });
+        if self.messages.len() > MAX_MESSAGES {
+            self.messages.pop_front();
         }
     }
 
@@ -257,8 +322,9 @@ impl NestedAgentPlugin {
                 self.render(ctx);
             }
             "Escape" => {
-                if let Some(client) = &mut self.pi_client {
-                    let _ = client.abort();
+                if let (Some(client), Some(session_id)) = (&mut self.acp_client, &self.session_id) {
+                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let _ = rt.block_on(client.cancel(session_id));
                 }
                 self.status = AgentStatus::Idle;
                 self.render(ctx);
@@ -272,7 +338,6 @@ impl NestedAgentPlugin {
     }
 
     fn handle_click(&mut self, ctx: &mut RuntimeContext, _x: u16, y: u16) {
-        // Handle clicks on message history or buttons
         let _ = y;
         self.render(ctx);
     }
@@ -289,26 +354,26 @@ impl NestedAgentPlugin {
 
     fn build_frame(&self) -> Frame {
         let mut cells = Vec::with_capacity((SURFACE_WIDTH * SURFACE_HEIGHT) as usize);
-        
+
         let header = match self.status {
             AgentStatus::Idle => " Nested Agent [Ready] ",
             AgentStatus::Running => " Nested Agent [Running...] ",
             AgentStatus::Error => " Nested Agent [Error] ",
         };
         self.push_line(&mut cells, header, TermColor::Rgb(255, 140, 66), TermColor::Rgb(30, 30, 40));
-        
+
         self.push_line(&mut cells, &"─".repeat(SURFACE_WIDTH as usize), TermColor::Rgb(60, 60, 80), TermColor::Rgb(30, 30, 40));
 
         let visible_rows = SURFACE_HEIGHT.saturating_sub(4) as usize;
         let messages_to_show: Vec<_> = self.messages.iter().rev().take(visible_rows).collect();
-        
+
         for msg in messages_to_show.iter().rev() {
             let (prefix, color) = match msg.role {
                 MessageRole::User => ("> ", TermColor::Rgb(255, 140, 66)),
                 MessageRole::Assistant => ("  ", TermColor::Rgb(220, 220, 230)),
                 MessageRole::System => ("  ", TermColor::Rgb(140, 140, 150)),
             };
-            
+
             let line = format!("{}{}", prefix, truncate(&msg.content, SURFACE_WIDTH as usize - prefix.len() - 1));
             self.push_line(&mut cells, &line, color, TermColor::Rgb(30, 30, 40));
         }
@@ -357,10 +422,6 @@ fn truncate(s: &str, max_len: usize) -> String {
         truncated.push('…');
         truncated
     }
-}
-
-fn load_config(_ctx: &InitContext) -> NestedAgentConfig {
-    NestedAgentConfig::default()
 }
 
 export_plugin!(NestedAgentPlugin);

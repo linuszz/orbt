@@ -2305,6 +2305,19 @@ name = "orbit"
 version = "0.2.0"
 
 [[package]]
+name = "orbit-agent-acp"
+version = "0.2.0"
+dependencies = [
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "orbit-plugin"
 version = "0.2.0"
 dependencies = [
