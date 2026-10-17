@@ -1676,7 +1676,7 @@ fn render_single_pane(frame: &mut Frame, area: Rect, pane_id: PaneId, app: &App,
                     WinButton::Close => "\u{2297}",
                     WinButton::Zoom if zoomed => "\u{2296}",
                     WinButton::Zoom => "\u{2295}",
-                    WinButton::Resize => "\u{2194}",
+                    WinButton::Resize => "\u{25cf}",
                 }
             } else {
                 "\u{25cf}"
@@ -2211,7 +2211,7 @@ mod tests {
         assert_eq!(buf[(zoom.x, zoom.y)].symbol(), "\u{2295}", "zoom glyph");
         assert_eq!(
             buf[(resize.x, resize.y)].symbol(),
-            "\u{2194}",
+            "\u{25cf}",
             "resize glyph"
         );
     }
