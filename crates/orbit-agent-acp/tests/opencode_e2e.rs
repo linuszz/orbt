@@ -221,7 +221,7 @@ fn test_opencode_acp_prompt_simple() {
     );
 
     let mut got_response = false;
-    let mut got_update = false;
+    let mut got_agent_text = false;
     let mut agent_text = String::new();
 
     for line in lines.by_ref().take(200) {
@@ -234,7 +234,6 @@ fn test_opencode_acp_prompt_simple() {
             if resp.get("id").and_then(|i| i.as_u64()) == Some(3) {
                 println!("Prompt response: {}", resp);
                 got_response = true;
-                continue;
             }
         }
 
@@ -248,6 +247,7 @@ fn test_opencode_acp_prompt_simple() {
                         if let Some(text) = update["content"]["text"].as_str() {
                             agent_text.push_str(text);
                             print!("{}", text);
+                            got_agent_text = true;
                         }
                     }
                     "agent_message" => {
@@ -255,6 +255,7 @@ fn test_opencode_acp_prompt_simple() {
                             for block in content {
                                 if let Some(text) = block["text"].as_str() {
                                     agent_text.push_str(text);
+                                    got_agent_text = true;
                                 }
                             }
                         }
@@ -262,22 +263,21 @@ fn test_opencode_acp_prompt_simple() {
                     "tool_call" => {
                         let title = update["title"].as_str().unwrap_or("unknown");
                         println!("\n[tool] {}", title);
-                        got_update = true;
                     }
-                    _ => {
-                        got_update = true;
-                    }
+                    _ => {}
                 }
             }
         }
 
-        if got_response && got_update {
+        if got_response && got_agent_text {
             break;
         }
     }
 
     println!("\nAgent text: {}", agent_text);
     assert!(got_response, "did not receive prompt response");
+    assert!(got_agent_text, "did not receive any agent text");
 
-    let _ = child.kill();
+    drop(stdin);
+    let _ = child.wait();
 }
