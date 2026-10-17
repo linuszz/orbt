@@ -1076,31 +1076,42 @@ impl App {
 
     fn discover_plugin_configs() -> std::collections::HashMap<String, orbit_plugin::PluginConfig> {
         let mut configs = std::collections::HashMap::new();
-        let scanner = orbit_plugin::loader::PluginScanner::new(
-            std::env::var("HOME")
-                .map(std::path::PathBuf::from)
-                .unwrap_or_else(|_| std::path::PathBuf::from("~"))
-                .join(".orbit")
-                .join("modules"),
-        );
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("~"));
+        let modules_dir = home.join(".orbit").join("modules");
 
-        if let Ok(plugins) = scanner.scan() {
-            for (_, manifest) in plugins {
-                let plugin_id = manifest.id.to_string();
-                let config_path = std::env::var("HOME")
-                    .map(std::path::PathBuf::from)
-                    .unwrap_or_else(|_| std::path::PathBuf::from("~"))
-                    .join(".orbit")
-                    .join("plugin-configs")
-                    .join(format!("{}.toml", manifest.id.to_path_segment()));
+        tracing::debug!("scanning for plugins in: {}", modules_dir.display());
 
-                if let Ok(config) = orbit_plugin::PluginConfig::load(
-                    manifest.id.clone(),
-                    manifest.config_schema.clone(),
-                    config_path,
-                ) {
-                    configs.insert(plugin_id, config);
+        let scanner = orbit_plugin::loader::PluginScanner::new(modules_dir);
+
+        match scanner.scan() {
+            Ok(plugins) => {
+                tracing::info!("discovered {} plugins", plugins.len());
+                for (_, manifest) in plugins {
+                    let plugin_id = manifest.id.to_string();
+                    let config_path = home
+                        .join(".orbit")
+                        .join("plugin-configs")
+                        .join(format!("{}.toml", manifest.id.to_path_segment()));
+
+                    match orbit_plugin::PluginConfig::load(
+                        manifest.id.clone(),
+                        manifest.config_schema.clone(),
+                        config_path,
+                    ) {
+                        Ok(config) => {
+                            tracing::info!("loaded config for plugin: {}", plugin_id);
+                            configs.insert(plugin_id, config);
+                        }
+                        Err(e) => {
+                            tracing::warn!("failed to load config for {}: {}", plugin_id, e);
+                        }
+                    }
                 }
+            }
+            Err(e) => {
+                tracing::warn!("failed to scan plugins: {}", e);
             }
         }
 
