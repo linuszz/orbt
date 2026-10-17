@@ -1055,7 +1055,7 @@ impl App {
             settings_tab: 0,
             settings_plugin_scroll: 0,
             settings_plugin_selected: 0,
-            plugin_configs: std::collections::HashMap::new(),
+            plugin_configs: Self::discover_plugin_configs(),
             pending_payload_path: None,
             mobile_mode: cols < 80 || rows < 25,
             mobile_view: MobileView::Terminal,
@@ -1072,6 +1072,39 @@ impl App {
             inspect_overlay: None,
             pending_osc52: None,
         }
+    }
+
+    fn discover_plugin_configs() -> std::collections::HashMap<String, orbit_plugin::PluginConfig> {
+        let mut configs = std::collections::HashMap::new();
+        let scanner = orbit_plugin::loader::PluginScanner::new(
+            std::env::var("HOME")
+                .map(std::path::PathBuf::from)
+                .unwrap_or_else(|_| std::path::PathBuf::from("~"))
+                .join(".orbit")
+                .join("modules"),
+        );
+
+        if let Ok(plugins) = scanner.scan() {
+            for (_, manifest) in plugins {
+                let plugin_id = manifest.id.to_string();
+                let config_path = std::env::var("HOME")
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|_| std::path::PathBuf::from("~"))
+                    .join(".orbit")
+                    .join("plugin-configs")
+                    .join(format!("{}.toml", manifest.id.to_path_segment()));
+
+                if let Ok(config) = orbit_plugin::PluginConfig::load(
+                    manifest.id.clone(),
+                    manifest.config_schema.clone(),
+                    config_path,
+                ) {
+                    configs.insert(plugin_id, config);
+                }
+            }
+        }
+
+        configs
     }
 
     pub fn queue_osc52_copy(&mut self, text: &str) {
