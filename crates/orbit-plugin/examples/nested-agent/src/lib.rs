@@ -4,6 +4,11 @@ use orbit_plugin::prelude::*;
 use std::collections::VecDeque;
 
 const MAX_MESSAGES: usize = 100;
+
+fn shared_rt() -> &'static tokio::runtime::Runtime {
+    static RT: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+    RT.get_or_init(|| tokio::runtime::Runtime::new().unwrap())
+}
 const SURFACE_WIDTH: u16 = 44;
 const SURFACE_HEIGHT: u16 = 20;
 
@@ -172,7 +177,7 @@ impl NestedAgentPlugin {
         }
 
         if let (Some(client), Some(session_id)) = (&mut self.acp_client, &self.session_id) {
-            let rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = shared_rt();
             match rt.block_on(client.prompt(session_id, message)) {
                 Ok(_) => {
                     self.status = AgentStatus::Running;
@@ -199,7 +204,7 @@ impl NestedAgentPlugin {
             env: Vec::new(),
         };
 
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_rt();
         match rt.block_on(AcpClient::spawn(config)) {
             Ok(mut client) => match rt.block_on(client.initialize()) {
                 Ok(_) => {
@@ -241,7 +246,7 @@ impl NestedAgentPlugin {
     }
 
     fn poll_events(&mut self, ctx: &mut RuntimeContext) {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = shared_rt();
         
         loop {
             let (client, session_id) = match (&mut self.acp_client, &self.session_id) {
@@ -329,7 +334,7 @@ impl NestedAgentPlugin {
             }
             "Escape" => {
                 if let (Some(client), Some(session_id)) = (&mut self.acp_client, &self.session_id) {
-                    let rt = tokio::runtime::Runtime::new().unwrap();
+                    let rt = shared_rt();
                     let _ = rt.block_on(client.cancel(session_id));
                 }
                 self.status = AgentStatus::Idle;
