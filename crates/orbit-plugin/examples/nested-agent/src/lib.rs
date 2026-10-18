@@ -202,20 +202,26 @@ impl NestedAgentPlugin {
         let rt = tokio::runtime::Runtime::new().unwrap();
         match rt.block_on(AcpClient::spawn(config)) {
             Ok(mut client) => match rt.block_on(client.initialize()) {
-                Ok(_) => match rt.block_on(client.new_session(None)) {
-                    Ok(session_id) => {
-                        self.acp_client = Some(client);
-                        self.session_id = Some(session_id);
-                        self.status = AgentStatus::Idle;
+                Ok(_) => {
+                    let cwd = std::env::current_dir()
+                        .ok()
+                        .map(|p| p.to_string_lossy().to_string())
+                        .or_else(|| Some("/tmp".to_string()));
+                    match rt.block_on(client.new_session(cwd)) {
+                        Ok(session_id) => {
+                            self.acp_client = Some(client);
+                            self.session_id = Some(session_id);
+                            self.status = AgentStatus::Idle;
+                        }
+                        Err(e) => {
+                            self.messages.push_back(ChatMessage {
+                                role: MessageRole::System,
+                                content: format!("Failed to create session: {}", e),
+                            });
+                            self.status = AgentStatus::Error;
+                        }
                     }
-                    Err(e) => {
-                        self.messages.push_back(ChatMessage {
-                            role: MessageRole::System,
-                            content: format!("Failed to create session: {}", e),
-                        });
-                        self.status = AgentStatus::Error;
-                    }
-                },
+                }
                 Err(e) => {
                     self.messages.push_back(ChatMessage {
                         role: MessageRole::System,
