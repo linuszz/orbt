@@ -194,7 +194,7 @@ impl NestedAgentPlugin {
     fn start_acp(&mut self, _ctx: &mut RuntimeContext) {
         let config = AcpClientConfig {
             command: "opencode".to_string(),
-            args: vec!["acp".to_string()],
+            args: vec!["acp".to_string(), "--pure".to_string()],
             cwd: Some(".".to_string()),
             env: Vec::new(),
         };

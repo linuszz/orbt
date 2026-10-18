@@ -15,7 +15,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Spawning OpenCode ACP...");
     let mut client = AcpClient::spawn(AcpClientConfig {
         command: "opencode".to_string(),
-        args: vec!["acp".to_string()],
+        args: vec!["acp".to_string(), "--pure".to_string()],
         cwd: Some("/tmp".to_string()),
         env: vec![],
     })
