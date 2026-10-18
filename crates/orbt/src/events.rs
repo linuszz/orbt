@@ -232,6 +232,7 @@ async fn execute_command(
                         width,
                     })
                     .await;
+                app.needs_resize = true;
             }
         }
         "new_tab" => {
@@ -3491,6 +3492,7 @@ async fn handle_mouse(
                                         *pid,
                                     );
                                     app.set_strip_scroll(target);
+                                    app.needs_resize = true;
                                 }
                             }
                         }
@@ -3807,6 +3809,7 @@ async fn handle_mouse(
                         .await;
                 }
                 resize_local_grids(app, term_size.width, term_size.height);
+                send_pane_resizes(app, writer, term_size.width, term_size.height).await;
                 app.needs_redraw = true;
                 return;
             }

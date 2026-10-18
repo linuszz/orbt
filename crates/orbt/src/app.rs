@@ -7,6 +7,47 @@ use orbt_protocol::{
     PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
+/// Thin stub for the plugin config system (the full orbit-plugin crate is Phase 4 / Mars).
+/// Lives here so the settings UI and scanner call-sites compile without the real dep.
+mod orbit_plugin {
+    #[derive(Clone, Default)]
+    pub struct PluginConfig {
+        pub id: String,
+    }
+    pub mod loader {
+        pub struct PluginScanner;
+        impl PluginScanner {
+            pub fn new(_dir: std::path::PathBuf) -> Self { Self }
+            pub fn scan(&self) -> anyhow::Result<Vec<(String, Manifest)>> { Ok(vec![]) }
+        }
+        pub struct Manifest {
+            pub id: ManifestId,
+            pub config_schema: Option<String>,
+        }
+        #[derive(Clone)]
+        pub struct ManifestId(String);
+        impl ManifestId {
+            pub fn as_str(&self) -> &str { &self.0 }
+            pub fn to_path_segment(&self) -> &str { &self.0 }
+        }
+        impl std::fmt::Display for ManifestId {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(&self.0)
+            }
+        }
+    }
+    impl PluginConfig {
+        pub fn load(
+            _id: loader::ManifestId,
+            _schema: Option<String>,
+            _path: std::path::PathBuf,
+        ) -> anyhow::Result<Self> {
+            Ok(Self::default())
+        }
+        pub fn keys(&self) -> Vec<&str> { vec![] }
+    }
+}
+
 /// Which column has keyboard focus in the mobile SPACES two-column view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MobileColFocus {
@@ -1597,6 +1638,7 @@ impl App {
                     .retain(|id, _| state.agents.iter().any(|a| a.id == *id));
                 self.sort_agents();
                 self.needs_redraw = true;
+                self.needs_resize = true;
             }
             ServerEvent::PaneOutput { pane_id, data } => {
                 if let Some(sel) = &self.selection {
