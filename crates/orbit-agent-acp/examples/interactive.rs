@@ -32,7 +32,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let session_id = client
-        .new_session(Some("/tmp".to_string()))
+        .new_session(Some("/home/linustest/orbt".to_string()))
         .await?;
     println!("\n[ok] session created: {}", session_id);
 
