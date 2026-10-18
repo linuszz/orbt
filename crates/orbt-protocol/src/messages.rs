@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-pub const PROTOCOL_VERSION: u32 = 10; // was 9; ServerEvent::SurfaceFrame for plugin system
+pub const PROTOCOL_VERSION: u32 = 11; // was 10; ClientMessage::PluginCommand for plugin system
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Capabilities {
@@ -150,6 +150,13 @@ pub enum ClientMessage {
 
     CopyToClipboard {
         text: String,
+    },
+
+    // Invoke a command on a loaded plugin (routes to Plugin::on_command).
+    PluginCommand {
+        plugin_id: String,
+        name: String,
+        args: serde_json::Value,
     },
 
     // Phase 3: upload a local file (typically an image) to orbtd's payload store.

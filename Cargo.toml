@@ -5,8 +5,8 @@ members = [
     "crates/orbt-protocol",
     "crates/orbt-core",
     "crates/orbit-alias",
-    "crates/orbit-plugin",
-    "crates/orbit-agent-acp",
+    # "crates/orbit-plugin",    # Phase 4 (Mars): WASM plugin runtime.
+    # "crates/orbit-agent-acp", # Phase 4 (Mars): ACP agent runtime.
 ]
 exclude = ["tools"]
 
@@ -75,8 +75,6 @@ wasmtime = { version = "25", features = ["cranelift", "runtime"] }
 # Internal crates (path + version so `cargo publish` resolves from crates.io)
 orbt-protocol = { path = "crates/orbt-protocol", version = "0.2" }
 orbt-core = { path = "crates/orbt-core", version = "0.2" }
-orbit-plugin = { path = "crates/orbit-plugin", version = "0.2" }
-orbit-agent-acp = { path = "crates/orbit-agent-acp", version = "0.2" }
 
 
 [profile.release]
