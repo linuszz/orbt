@@ -268,7 +268,10 @@ pub fn render(frame: &mut Frame, app: &App) {
     } else {
         SIDEBAR_COLLAPSED_W
     };
-    let effective_mode = if app.agent_fleet_enabled {
+    let plugin_dock_active = !app.plugin_surfaces.is_empty();
+    let effective_mode = if plugin_dock_active {
+        AgentPanelMode::Sidebar
+    } else if app.agent_fleet_enabled {
         app.agent_panel_mode
     } else {
         AgentPanelMode::Hidden
@@ -338,15 +341,17 @@ pub fn render(frame: &mut Frame, app: &App) {
     let border_y = rows[3].y + 1;
     widgets::status_bar::render(frame, status_inner, app);
 
-    if app.agent_fleet_enabled {
+    let agent_area = Rect {
+        x: cols[2].x,
+        y: cols[2].y,
+        width: cols[2].width,
+        height: cols[2].height.saturating_sub(1),
+    };
+    if plugin_dock_active && agent_area.width > 0 {
+        widgets::plugin_dock::render(frame, agent_area, app);
+    } else if app.agent_fleet_enabled {
         match app.agent_panel_mode {
             AgentPanelMode::Sidebar => {
-                let agent_area = Rect {
-                    x: cols[2].x,
-                    y: cols[2].y,
-                    width: cols[2].width,
-                    height: cols[2].height.saturating_sub(1),
-                };
                 widgets::agent_monitor::render(frame, agent_area, app);
             }
             AgentPanelMode::Hidden => {}

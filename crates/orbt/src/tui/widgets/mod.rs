@@ -8,6 +8,7 @@ pub mod mobile_confirm;
 pub mod mobile_nav;
 pub mod mobile_spaces;
 pub mod pane_overview;
+pub mod plugin_dock;
 pub mod settings_modal;
 pub mod spaces_sidebar;
 pub mod status_bar;

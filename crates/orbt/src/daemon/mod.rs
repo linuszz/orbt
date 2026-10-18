@@ -1,6 +1,7 @@
 pub mod agent;
 pub mod io;
 pub mod ipc;
+pub mod plugin_manager;
 pub mod plugin_surfaces;
 pub mod pty;
 pub mod session;
@@ -84,6 +85,8 @@ pub async fn run(no_restore: bool) -> Result<()> {
 
     let (event_bus, _rx) = broadcast::channel::<ServerEvent>(256);
 
+    let plugin_manager = crate::daemon::plugin_manager::PluginManager::load_plugins(event_bus.clone());
+
     let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
     let cwd = std::env::current_dir()
         .ok()
@@ -130,11 +133,12 @@ pub async fn run(no_restore: bool) -> Result<()> {
     }
 
     tokio::select! {
-        res = accept_loop(listener, space_manager.clone()) => {
+        res = accept_loop(listener, space_manager.clone(), plugin_manager.clone()) => {
             if let Err(e) = res { error!("accept loop error: {e:#}"); }
         }
         _ = wait_for_signal() => {
             info!("stopping orbtd");
+            plugin_manager.shutdown_all();
             space_manager.save_snapshot().await;
             space_manager.shutdown_all().await;
         }
@@ -165,12 +169,14 @@ async fn wait_for_signal() {
 async fn accept_loop(
     listener: interprocess::local_socket::tokio::Listener,
     space_manager: Arc<SpaceManager>,
+    plugin_manager: Arc<crate::daemon::plugin_manager::PluginManager>,
 ) -> Result<()> {
     loop {
         let stream = listener.accept().await?;
         let space_manager = space_manager.clone();
+        let plugin_manager = plugin_manager.clone();
         tokio::spawn(async move {
-            if let Err(e) = ipc::handle_client(stream, space_manager).await {
+            if let Err(e) = ipc::handle_client(stream, space_manager, plugin_manager).await {
                 error!("client error: {e:#}");
             }
         });

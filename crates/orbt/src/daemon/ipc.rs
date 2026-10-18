@@ -29,7 +29,11 @@ async fn read_msg<R: AsyncRead + Unpin>(stream: &mut R) -> Result<ClientMessage>
     Ok(msg)
 }
 
-pub async fn handle_client<S>(mut stream: S, space_manager: Arc<SpaceManager>) -> Result<()>
+pub async fn handle_client<S>(
+    mut stream: S,
+    space_manager: Arc<SpaceManager>,
+    plugin_manager: Arc<crate::daemon::plugin_manager::PluginManager>,
+) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
@@ -64,6 +68,22 @@ where
         },
     )
     .await?;
+
+    // Re-broadcast the latest plugin surface frames so a freshly attached
+    // client sees the current dock content (frames pushed before attach are
+    // otherwise missed — the broadcast bus has no retention).
+    for (surface_id, plugin_id, frame) in plugin_manager.snapshot_frames() {
+        let event = ServerEvent::SurfaceFrame {
+            surface_id,
+            plugin_id,
+            width: frame.size.w,
+            height: frame.size.h,
+            cells: frame.buffer.clone(),
+        };
+        if write_msg(&mut stream, &event).await.is_err() {
+            break;
+        }
+    }
 
     // Nudge all PTY children with SIGWINCH so idle TUI apps (Claude Code, vim,
     // yazi) redraw and emit fresh output. Without this, a frozen cursor_visible=false
@@ -182,6 +202,33 @@ where
                     ClientMessage::CopyToClipboard { text } => {
                         if let Ok(mut cb) = Clipboard::new() {
                             let _ = cb.set_text(text);
+                        }
+                    }
+                    ClientMessage::PluginCommand {
+                        plugin_id,
+                        name,
+                        args_json,
+                    } => {
+                        let args = match serde_json::from_str(&args_json) {
+                            Ok(args) => args,
+                            Err(e) => {
+                                tracing::warn!("plugin command {} {}: invalid args json: {}", plugin_id, name, e);
+                                continue;
+                            }
+                        };
+                        match plugin_manager.command(&plugin_id, &name, args).await {
+                            Ok(Some(result)) => {
+                                tracing::debug!("plugin command {} {} -> {}", plugin_id, name, result);
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                tracing::warn!("plugin command {} {} failed: {}", plugin_id, name, e);
+                                let _ = write_msg(
+                                    &mut stream,
+                                    &ServerEvent::ProtocolError { code: 2, message: e },
+                                )
+                                .await;
+                            }
                         }
                     }
                     ClientMessage::CreateSpace { name } => {

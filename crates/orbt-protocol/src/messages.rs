@@ -153,10 +153,12 @@ pub enum ClientMessage {
     },
 
     // Invoke a command on a loaded plugin (routes to Plugin::on_command).
+    // args_json is a JSON-encoded object; the wire format is bincode, which
+    // cannot carry serde_json::Value directly.
     PluginCommand {
         plugin_id: String,
         name: String,
-        args: serde_json::Value,
+        args_json: String,
     },
 
     // Phase 3: upload a local file (typically an image) to orbtd's payload store.

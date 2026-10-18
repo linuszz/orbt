@@ -349,6 +349,14 @@ async fn execute_command(
             app.settings_selected = 0;
             app.settings_tab = 0;
         }
+        "plugin_dock" => {
+            if app.plugin_dock_focused {
+                app.plugin_dock_focused = false;
+                app.plugin_dock_input.clear();
+            } else if !app.plugin_surfaces.is_empty() {
+                app.plugin_dock_focused = true;
+            }
+        }
         "help" => app.show_help = true,
         _ => {}
     }
@@ -592,6 +600,42 @@ async fn handle_eclipse_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
                 m.response.push(c);
             }
             app.needs_redraw = true;
+        }
+        _ => {}
+    }
+}
+
+async fn handle_plugin_dock_key(key: KeyEvent, app: &mut App, writer: &IpcWriter) {
+    match key.code {
+        KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            app.plugin_dock_input.push(c);
+        }
+        KeyCode::Enter => {
+            if app.plugin_dock_input.is_empty() {
+                return;
+            }
+            let plugin_id = match app.plugin_surfaces.values().next() {
+                Some(surface) => surface.plugin_id.clone(),
+                None => return,
+            };
+            let message = std::mem::take(&mut app.plugin_dock_input);
+            let _ = writer
+                .send(ClientMessage::PluginCommand {
+                    plugin_id,
+                    name: "nested-agent.intercept".to_string(),
+                    args_json: serde_json::json!({ "message": message }).to_string(),
+                })
+                .await;
+        }
+        KeyCode::Backspace => {
+            app.plugin_dock_input.pop();
+        }
+        KeyCode::Esc => {
+            if !app.plugin_dock_input.is_empty() {
+                app.plugin_dock_input.clear();
+            } else {
+                app.plugin_dock_focused = false;
+            }
         }
         _ => {}
     }
@@ -936,6 +980,11 @@ async fn handle_key(
     // Agent Detail modal captures keyboard when open (lower priority than Eclipse).
     if app.agent_detail_modal.is_some() {
         handle_agent_detail_key(key, app, writer).await;
+        return;
+    }
+
+    if app.plugin_dock_focused && !app.plugin_surfaces.is_empty() {
+        handle_plugin_dock_key(key, app, writer).await;
         return;
     }
 

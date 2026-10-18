@@ -14,6 +14,23 @@ pub struct InitContext<'a> {
 }
 
 impl<'a> InitContext<'a> {
+    pub fn new(api: &'a dyn PluginApi) -> Self {
+        Self {
+            api,
+            surfaces: HashMap::new(),
+            subscriptions: HashMap::new(),
+        }
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        HashMap<SurfaceId, Surface>,
+        HashMap<SubscriptionId, HookSpec>,
+    ) {
+        (self.surfaces, self.subscriptions)
+    }
+
     pub fn declare_surface(&mut self, decl: SurfaceDecl) -> Result<SurfaceId, PluginError> {
         let id = SurfaceId(self.surfaces.len() as u64);
         self.surfaces.insert(id, Surface { id, decl });
@@ -45,10 +62,6 @@ impl<'a> InitContext<'a> {
     ) -> Result<(), PluginError> {
         Ok(())
     }
-
-    pub fn config(&self) -> &crate::manifest::Manifest {
-        unimplemented!()
-    }
 }
 
 pub struct RuntimeContext<'a> {
@@ -58,15 +71,37 @@ pub struct RuntimeContext<'a> {
 }
 
 impl<'a> RuntimeContext<'a> {
-    pub fn dispatch(&self, _cmd: CommandInvocation) -> Result<(), PluginError> {
-        Ok(())
+    pub fn new(
+        api: &'a dyn PluginApi,
+        surfaces: HashMap<SurfaceId, Surface>,
+        subscriptions: HashMap<SubscriptionId, HookSpec>,
+    ) -> Self {
+        Self {
+            api,
+            surfaces,
+            subscriptions,
+        }
+    }
+
+    pub fn into_parts(
+        self,
+    ) -> (
+        HashMap<SurfaceId, Surface>,
+        HashMap<SubscriptionId, HookSpec>,
+    ) {
+        (self.surfaces, self.subscriptions)
+    }
+
+    pub fn dispatch(&self, cmd: CommandInvocation) -> Result<(), PluginError> {
+        self.api.dispatch(cmd)
     }
 
     pub fn request<R: serde::de::DeserializeOwned>(
         &self,
-        _cmd: CommandInvocation,
+        cmd: CommandInvocation,
     ) -> Result<R, PluginError> {
-        unimplemented!()
+        let value = self.api.request(cmd)?;
+        serde_json::from_value(value).map_err(|e| PluginError::Serialization(e.to_string()))
     }
 
     pub fn surface(&self, id: SurfaceId) -> SurfaceHandle<'_> {
@@ -76,12 +111,9 @@ impl<'a> RuntimeContext<'a> {
         }
     }
 
-    pub fn publish(&self, _topic: &str, _payload: &impl Serialize) -> Result<(), PluginError> {
-        Ok(())
-    }
-
-    pub fn config(&self) -> &crate::manifest::Manifest {
-        unimplemented!()
+    pub fn publish(&self, topic: &str, payload: &impl Serialize) -> Result<(), PluginError> {
+        let value = serde_json::to_value(payload).map_err(|e| PluginError::Serialization(e.to_string()))?;
+        self.api.publish(topic, value)
     }
 
     pub fn deactivate_self(&self) -> Result<(), PluginError> {
@@ -98,6 +130,7 @@ pub trait PluginApi: Send + Sync {
     fn dispatch(&self, cmd: CommandInvocation) -> Result<(), PluginError>;
     fn request(&self, cmd: CommandInvocation) -> Result<serde_json::Value, PluginError>;
     fn publish(&self, topic: &str, payload: serde_json::Value) -> Result<(), PluginError>;
+    fn render(&self, surface_id: SurfaceId, frame: &crate::render::Frame) -> Result<(), PluginError>;
     fn store_read(&self, key: &str) -> Result<Option<bytes::Bytes>, PluginError>;
     fn store_write(&self, key: &str, value: bytes::Bytes) -> Result<(), PluginError>;
     fn store_delete(&self, key: &str) -> Result<(), PluginError>;

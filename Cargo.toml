@@ -27,6 +27,7 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "time"
 # Serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+bytes = "1"
 # bincode 2.x: the `serde` feature flag is REQUIRED to access the `bincode::serde`
 # module (encode_to_vec / decode_from_slice). Message types only derive
 # serde::Serialize/Deserialize; do NOT derive bincode::Encode.

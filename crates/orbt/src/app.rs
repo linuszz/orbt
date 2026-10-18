@@ -7,6 +7,14 @@ use orbt_protocol::{
     PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
+#[derive(Debug, Clone)]
+pub struct PluginSurfaceFrame {
+    pub plugin_id: String,
+    pub width: u16,
+    pub height: u16,
+    pub cells: Vec<Cell>,
+}
+
 /// Which column has keyboard focus in the mobile SPACES two-column view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MobileColFocus {
@@ -556,6 +564,12 @@ pub static COMMANDS: &[CommandDef] = &[
         shortcut: "",
     },
     CommandDef {
+        id: "plugin_dock",
+        label: "Plugin Dock",
+        group: "Plugin",
+        shortcut: "P",
+    },
+    CommandDef {
         id: "agent_panel_switch",
         label: "Agent Panel: Switch Form",
         group: "View",
@@ -825,6 +839,12 @@ pub struct App {
     pub settings_plugin_selected: usize,
     /// Loaded plugin configurations (plugin_id -> config).
     pub plugin_configs: std::collections::HashMap<String, orbit_plugin::PluginConfig>,
+    /// Latest frame per plugin surface (surface_id -> frame), pushed by orbtd.
+    pub plugin_surfaces: std::collections::HashMap<u64, PluginSurfaceFrame>,
+    /// True while the plugin dock input has keyboard focus.
+    pub plugin_dock_focused: bool,
+    /// Pending text in the plugin dock input line.
+    pub plugin_dock_input: String,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
     /// events.rs drains this and injects the path as PTY input.
     pub pending_payload_path: Option<String>,
@@ -1056,6 +1076,9 @@ impl App {
             settings_plugin_scroll: 0,
             settings_plugin_selected: 0,
             plugin_configs: Self::discover_plugin_configs(),
+            plugin_surfaces: std::collections::HashMap::new(),
+            plugin_dock_focused: false,
+            plugin_dock_input: String::new(),
             pending_payload_path: None,
             mobile_mode: cols < 80 || rows < 25,
             mobile_view: MobileView::Terminal,
@@ -1907,6 +1930,24 @@ impl App {
                 self.pending_payload_path = Some(path.clone());
                 self.needs_redraw = true;
             }
+            ServerEvent::SurfaceFrame {
+                surface_id,
+                plugin_id,
+                width,
+                height,
+                cells,
+            } => {
+                self.plugin_surfaces.insert(
+                    *surface_id,
+                    PluginSurfaceFrame {
+                        plugin_id: plugin_id.clone(),
+                        width: *width,
+                        height: *height,
+                        cells: cells.clone(),
+                    },
+                );
+                self.needs_redraw = true;
+            }
             _ => {}
         }
     }
@@ -2232,6 +2273,29 @@ pub mod tests {
         assert!(app.panes.contains_key(&PaneId(1)));
         assert_eq!(app.mode, InputMode::Normal);
         assert!(!app.should_quit);
+    }
+
+    #[test]
+    fn surface_frame_event_stores_frame() {
+        let state = minimal_state();
+        let mut app = App::from_welcome(&state, 80, 24);
+        assert!(app.plugin_surfaces.is_empty());
+
+        let cells = vec![Cell::default(); 4];
+        app.handle_server_event(&ServerEvent::SurfaceFrame {
+            surface_id: 7,
+            plugin_id: "orbit-ai/nested-agent".to_string(),
+            width: 2,
+            height: 2,
+            cells: cells.clone(),
+        });
+
+        let surface = app.plugin_surfaces.get(&7).expect("frame stored");
+        assert_eq!(surface.plugin_id, "orbit-ai/nested-agent");
+        assert_eq!(surface.width, 2);
+        assert_eq!(surface.height, 2);
+        assert_eq!(surface.cells.len(), 4);
+        assert!(app.needs_redraw);
     }
 
     #[test]

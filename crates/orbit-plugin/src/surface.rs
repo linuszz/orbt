@@ -67,8 +67,8 @@ pub struct SurfaceHandle<'a> {
 }
 
 impl<'a> SurfaceHandle<'a> {
-    pub fn render(&self, _frame: crate::render::Frame) -> Result<(), PluginError> {
-        Ok(())
+    pub fn render(&self, frame: crate::render::Frame) -> Result<(), PluginError> {
+        self.ctx.api.render(self.surface_id, &frame)
     }
 }
 
