@@ -31,7 +31,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         init_result.agent_capabilities.load_session
     );
 
-    let session_id = client.new_session(None).await?;
+    let session_id = client
+        .new_session(Some("/tmp".to_string()))
+        .await?;
     println!("\n[ok] session created: {}", session_id);
 
     println!("\n--- Interactive mode ---");

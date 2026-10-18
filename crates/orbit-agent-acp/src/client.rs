@@ -210,7 +210,10 @@ impl AcpClient {
     }
 
     pub async fn new_session(&mut self, cwd: Option<String>) -> Result<String> {
-        let params = crate::types::NewSessionParams { cwd, mcp_servers: None };
+        let params = crate::types::NewSessionParams {
+            cwd,
+            mcp_servers: Some(Vec::new()),
+        };
         let result = self
             .request("session/new", serde_json::to_value(&params)?)
             .await?;
