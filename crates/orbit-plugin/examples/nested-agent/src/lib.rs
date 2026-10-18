@@ -183,7 +183,7 @@ impl NestedAgentPlugin {
                     self.status = AgentStatus::Running;
                     self.poll_events(ctx);
                     if self.status == AgentStatus::Running {
-                        self.status = AgentStatus::Ready;
+                        self.status = AgentStatus::Idle;
                     }
                 }
                 Err(e) => {
