@@ -29,6 +29,7 @@ futures = { workspace = true }
 libc = { workspace = true }
 orbt-protocol = { workspace = true }
 orbt-core = { workspace = true }
+orbit-plugin = { workspace = true }
 toml = { workspace = true }
 serde = { workspace = true }
 unicode-width = { workspace = true }

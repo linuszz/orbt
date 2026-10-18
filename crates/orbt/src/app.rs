@@ -7,8 +7,6 @@ use orbt_protocol::{
     PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
-use crate::orbit_plugin;
-
 /// Which column has keyboard focus in the mobile SPACES two-column view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MobileColFocus {
