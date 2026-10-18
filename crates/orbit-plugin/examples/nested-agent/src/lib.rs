@@ -378,7 +378,7 @@ impl NestedAgentPlugin {
 
         self.push_line(&mut cells, &"─".repeat(SURFACE_WIDTH as usize), TermColor::Rgb(60, 60, 80), TermColor::Rgb(30, 30, 40));
 
-        let visible_rows = SURFACE_HEIGHT.saturating_sub(4) as usize;
+        let visible_rows = SURFACE_HEIGHT.saturating_sub(2) as usize;
         let messages_to_show: Vec<_> = self.messages.iter().rev().take(visible_rows).collect();
 
         for msg in messages_to_show.iter().rev() {
@@ -392,13 +392,6 @@ impl NestedAgentPlugin {
             self.push_line(&mut cells, &line, color, TermColor::Rgb(30, 30, 40));
         }
 
-        while cells.len() < (SURFACE_WIDTH * (SURFACE_HEIGHT - 2)) as usize {
-            cells.push(Cell { ch: ' ', fg: TermColor::Default, bg: TermColor::Rgb(30, 30, 40), flags: Default::default() });
-        }
-
-        let input_line = format!("> {}", truncate(&self.input_buffer, SURFACE_WIDTH as usize - 3));
-        self.push_line(&mut cells, &input_line, TermColor::Rgb(220, 220, 230), TermColor::Rgb(40, 40, 55));
-
         cells.truncate((SURFACE_WIDTH * SURFACE_HEIGHT) as usize);
         while cells.len() < (SURFACE_WIDTH * SURFACE_HEIGHT) as usize {
             cells.push(Cell { ch: ' ', fg: TermColor::Default, bg: TermColor::Rgb(30, 30, 40), flags: Default::default() });
@@ -408,11 +401,7 @@ impl NestedAgentPlugin {
             size: orbit_plugin::render::Size { w: SURFACE_WIDTH, h: SURFACE_HEIGHT },
             dirty: None,
             buffer: cells,
-            cursor: Some(Cursor {
-                x: 2 + self.input_buffer.len() as u16,
-                y: SURFACE_HEIGHT - 1,
-                kind: CursorKind::Blinking,
-            }),
+            cursor: None,
             interactives: vec![],
             target_client: None,
         }

@@ -609,6 +609,7 @@ async fn handle_plugin_dock_key(key: KeyEvent, app: &mut App, writer: &IpcWriter
     match key.code {
         KeyCode::Char(c) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             app.plugin_dock_input.push(c);
+            app.needs_redraw = true;
         }
         KeyCode::Enter => {
             if app.plugin_dock_input.is_empty() {
@@ -626,9 +627,15 @@ async fn handle_plugin_dock_key(key: KeyEvent, app: &mut App, writer: &IpcWriter
                     args_json: serde_json::json!({ "message": message }).to_string(),
                 })
                 .await;
+            app.needs_redraw = true;
         }
         KeyCode::Backspace => {
             app.plugin_dock_input.pop();
+            app.needs_redraw = true;
+        }
+        KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            app.plugin_dock_input.clear();
+            app.needs_redraw = true;
         }
         KeyCode::Esc => {
             if !app.plugin_dock_input.is_empty() {
@@ -636,6 +643,7 @@ async fn handle_plugin_dock_key(key: KeyEvent, app: &mut App, writer: &IpcWriter
             } else {
                 app.plugin_dock_focused = false;
             }
+            app.needs_redraw = true;
         }
         _ => {}
     }
