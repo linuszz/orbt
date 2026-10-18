@@ -182,6 +182,9 @@ impl NestedAgentPlugin {
                 Ok(_) => {
                     self.status = AgentStatus::Running;
                     self.poll_events(ctx);
+                    if self.status == AgentStatus::Running {
+                        self.status = AgentStatus::Ready;
+                    }
                 }
                 Err(e) => {
                     self.messages.push_back(ChatMessage {
