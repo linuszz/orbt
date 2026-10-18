@@ -58,7 +58,11 @@ async fn main() -> std::io::Result<()> {
         .unwrap_or_else(|| "Say hi in one word".to_string());
 
     let mut got_frame = false;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(20);
+    let wait_s: u64 = std::env::args()
+        .nth(2)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(60);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(wait_s);
 
     loop {
         tokio::select! {
@@ -85,7 +89,7 @@ async fn main() -> std::io::Result<()> {
                 }
             }
             _ = tokio::time::sleep_until(deadline) => {
-                eprintln!("timeout after 20s");
+                eprintln!("timeout after {wait_s}s");
                 break;
             }
         }
