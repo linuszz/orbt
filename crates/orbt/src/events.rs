@@ -232,6 +232,7 @@ async fn execute_command(
                         width,
                     })
                     .await;
+                app.needs_resize = true;
             }
         }
         "new_tab" => {
@@ -346,6 +347,7 @@ async fn execute_command(
         "settings" => {
             app.settings_open = true;
             app.settings_selected = 0;
+            app.settings_tab = 0;
         }
         "help" => app.show_help = true,
         _ => {}
@@ -990,6 +992,36 @@ async fn handle_key(
     }
 
     if app.settings_open {
+        if key.code == KeyCode::Tab {
+            app.settings_tab = (app.settings_tab + 1) % 2;
+            app.needs_redraw = true;
+            return;
+        }
+
+        if app.settings_tab == 1 {
+            let total = app.plugin_configs.len();
+            match key.code {
+                KeyCode::Esc | KeyCode::Char('q') => {
+                    app.settings_open = false;
+                }
+                KeyCode::Up => {
+                    app.settings_plugin_selected = app.settings_plugin_selected.saturating_sub(1);
+                }
+                KeyCode::Down => {
+                    if total > 0 {
+                        app.settings_plugin_selected =
+                            (app.settings_plugin_selected + 1).min(total - 1);
+                    }
+                }
+                KeyCode::Enter => {
+                    // TODO: open plugin config editor
+                }
+                _ => {}
+            }
+            app.needs_redraw = true;
+            return;
+        }
+
         let num_settings = if app.agent_fleet_enabled { 5 } else { 4 };
         match key.code {
             KeyCode::Esc | KeyCode::Char('q') => {
@@ -1020,8 +1052,6 @@ async fn handle_key(
                         orbt_tui::app::LayoutMode::Bsp => orbt_tui::app::LayoutMode::Strip,
                         orbt_tui::app::LayoutMode::Strip => orbt_tui::app::LayoutMode::Bsp,
                     };
-                    // Apply to tabs that have not been split yet, and to the
-                    // current tab so the switch is visible straight away.
                     let _ = writer
                         .send(ClientMessage::SetTabLayout {
                             layout: app.layout_mode.into(),
@@ -3491,6 +3521,7 @@ async fn handle_mouse(
                                         *pid,
                                     );
                                     app.set_strip_scroll(target);
+                                    app.needs_resize = true;
                                 }
                             }
                         }
@@ -3807,6 +3838,7 @@ async fn handle_mouse(
                         .await;
                 }
                 resize_local_grids(app, term_size.width, term_size.height);
+                send_pane_resizes(app, writer, term_size.width, term_size.height).await;
                 app.needs_redraw = true;
                 return;
             }

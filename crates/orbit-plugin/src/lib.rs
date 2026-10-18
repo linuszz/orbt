@@ -1,0 +1,51 @@
+pub mod error;
+pub mod types;
+pub mod taxonomy;
+pub mod manifest;
+pub mod plugin;
+pub mod context;
+pub mod hook;
+pub mod command;
+pub mod surface;
+pub mod capability;
+pub mod store;
+pub mod bus;
+pub mod loader;
+pub mod runtime;
+pub mod dispatch;
+pub mod render;
+pub mod export;
+pub mod config;
+pub mod pi_client;
+
+pub mod prelude {
+    pub use crate::error::{PluginError, LoadError, UpgradeError};
+    pub use crate::types::{PluginId, SurfaceId, SubscriptionId, ContextId, Version};
+    pub use crate::plugin::Plugin;
+    pub use crate::context::{InitContext, RuntimeContext, UpgradeContext, PluginApi};
+    pub use crate::hook::{HookSpec, HookTopic, Filter, FilterValue, HookMode, Delivery, BufferPolicy, DropPolicy, StreamEvent, EdgeEvent, KeySpec, KeyEvent, Consume};
+    pub use crate::command::{CommandInvocation, CommandName, CommandProvidedDecl};
+    pub use crate::surface::{SurfaceDecl, SurfaceKind, SurfaceHandle, SurfaceEvent, Size, ResizePolicy};
+    pub use crate::render::{Frame, Rect, Cursor, CursorKind, InteractiveRegion, InteractiveAction, ClientId};
+    pub use orbt_protocol::Cell;
+    pub use orbt_protocol::TermColor;
+    pub use crate::store::{Store, StoreApi};
+    pub use crate::config::PluginConfig;
+    pub use crate::pi_client::{PiClient, PiConfig as PiClientConfig, PiCommand, PiResponse, PiEvent, PiMessage};
+}
+
+pub use error::{PluginError, LoadError, UpgradeError};
+pub use types::{PluginId, SurfaceId, SubscriptionId, ContextId, Version};
+pub use taxonomy::Taxonomy;
+pub use manifest::Manifest;
+pub use plugin::Plugin;
+pub use context::{InitContext, RuntimeContext, UpgradeContext, PluginApi};
+pub use hook::{HookSpec, HookTopic, Filter, FilterValue, HookMode, Delivery, BufferPolicy, DropPolicy, StreamEvent, EdgeEvent};
+pub use command::{CommandInvocation, CommandName, CommandProvidedDecl};
+pub use surface::{SurfaceDecl, SurfaceKind, SurfaceHandle, SurfaceEvent, Size, ResizePolicy};
+pub use capability::{CapabilityDecl, CapabilityName, Scope, CapabilityGrant};
+pub use store::{Store, StoreApi};
+pub use bus::{Bus, BusMessage};
+pub use config::{PluginConfig, PluginConfigManager};
+pub use pi_client::{PiClient, PiConfig, PiCommand, PiResponse, PiEvent, PiMessage, PiClientError};
+pub use runtime::{WasmRuntime, NativeRuntime, NativeThreadPool, PLUGIN_ABI_VERSION};

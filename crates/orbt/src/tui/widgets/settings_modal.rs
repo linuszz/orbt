@@ -16,9 +16,10 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let modal_w = 52u16.min(area.width.saturating_sub(4));
-    // Dynamic height: when fleet enabled, include satellites section; otherwise compact.
-    let modal_h = if app.agent_fleet_enabled {
+    let modal_w = 60u16.min(area.width.saturating_sub(4));
+    let modal_h = if app.settings_tab == 1 {
+        20u16.min(area.height.saturating_sub(4))
+    } else if app.agent_fleet_enabled {
         let satellite_rows = app.agents.len().max(1) as u16;
         (16 + satellite_rows).min(area.height.saturating_sub(4))
     } else {
@@ -53,6 +54,158 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
         width: modal_area.width.saturating_sub(2),
         height: modal_area.height.saturating_sub(2),
     };
+
+    render_tabs(frame, inner, app);
+
+    if app.settings_tab == 1 {
+        render_plugins_tab(frame, inner, app);
+        return;
+    }
+
+    render_general_tab(frame, inner, app);
+}
+
+fn render_tabs(frame: &mut Frame, inner: Rect, app: &App) {
+    let tab_y = inner.y;
+    let tab_general = " General ";
+    let tab_plugins = " Plugins ";
+    let general_selected = app.settings_tab == 0;
+    let plugins_selected = app.settings_tab == 1;
+
+    let general_style = if general_selected {
+        Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(fg_muted())
+    };
+    let plugins_style = if plugins_selected {
+        Style::default().fg(accent()).add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(fg_muted())
+    };
+
+    frame.render_widget(
+        Line::from(vec![
+            Span::styled(tab_general, general_style),
+            Span::raw("  "),
+            Span::styled(tab_plugins, plugins_style),
+        ]),
+        Rect {
+            x: inner.x,
+            y: tab_y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+
+    let divider = "─".repeat(inner.width as usize);
+    frame.render_widget(
+        Line::from(Span::styled(divider, Style::default().fg(border()))),
+        Rect {
+            x: inner.x,
+            y: tab_y + 1,
+            width: inner.width,
+            height: 1,
+        },
+    );
+}
+
+fn render_plugins_tab(frame: &mut Frame, inner: Rect, app: &App) {
+    let content_y = inner.y + 2;
+    let content_h = inner.height.saturating_sub(3);
+
+    if app.plugin_configs.is_empty() {
+        frame.render_widget(
+            Line::from(Span::styled(
+                "  No plugins installed",
+                Style::default().fg(fg_muted()),
+            )),
+            Rect {
+                x: inner.x,
+                y: content_y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+        return;
+    }
+
+    let visible_rows = content_h as usize;
+    let total = app.plugin_configs.len();
+    let scroll = app.settings_plugin_scroll.min(total.saturating_sub(visible_rows));
+
+    for (i, (plugin_id, config)) in app.plugin_configs.iter().enumerate().skip(scroll).take(visible_rows) {
+        let row_y = content_y + (i - scroll) as u16;
+        let is_selected = i == app.settings_plugin_selected;
+
+        let bg = if is_selected { bg_primary() } else { bg_secondary() };
+        let fg_name = if is_selected { fg_primary() } else { fg_secondary() };
+        let marker = if is_selected {
+            Span::styled("> ", Style::default().fg(accent()))
+        } else {
+            Span::raw("  ")
+        };
+
+        let name = plugin_id.to_string();
+        let keys: Vec<&str> = config.keys();
+        let status = if keys.is_empty() { "no config" } else { "configured" };
+        let status_color = if keys.is_empty() { fg_muted() } else { accent_idle() };
+
+        frame.render_widget(
+            Line::from(vec![
+                marker,
+                Span::styled(name.clone(), Style::default().fg(fg_name).bg(bg)),
+                Span::raw(" ".repeat(inner.width.saturating_sub(4 + name.len() as u16 + status.len() as u16) as usize)),
+                Span::styled(status, Style::default().fg(status_color).bg(bg)),
+            ]),
+            Rect {
+                x: inner.x,
+                y: row_y,
+                width: inner.width,
+                height: 1,
+            },
+        );
+    }
+
+    if total > visible_rows {
+        let more = total - visible_rows;
+        let overflow_y = content_y + visible_rows as u16;
+        if overflow_y < inner.y + inner.height {
+            frame.render_widget(
+                Line::from(Span::styled(
+                    format!("  + {} more", more),
+                    Style::default().fg(fg_muted()),
+                )),
+                Rect {
+                    x: inner.x,
+                    y: overflow_y,
+                    width: inner.width,
+                    height: 1,
+                },
+            );
+        }
+    }
+
+    let footer_y = inner.y + inner.height.saturating_sub(1);
+    let footer = Line::from(vec![
+        Span::styled("Tab ", Style::default().fg(accent())),
+        Span::styled("switch tab  ", Style::default().fg(fg_muted())),
+        Span::styled("Esc ", Style::default().fg(accent())),
+        Span::styled("close  ", Style::default().fg(fg_muted())),
+        Span::styled("Enter ", Style::default().fg(accent())),
+        Span::styled("edit config", Style::default().fg(fg_muted())),
+    ]);
+    frame.render_widget(
+        footer,
+        Rect {
+            x: inner.x,
+            y: footer_y,
+            width: inner.width,
+            height: 1,
+        },
+    );
+}
+
+fn render_general_tab(frame: &mut Frame, inner: Rect, app: &App) {
 
     let theme_display: String = app
         .theme_name

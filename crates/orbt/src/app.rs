@@ -7,6 +7,8 @@ use orbt_protocol::{
     PaneLayout, ServerEvent, SpaceId, SplitDir, TabId, ToolCall,
 };
 
+use crate::orbit_plugin;
+
 /// Which column has keyboard focus in the mobile SPACES two-column view.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum MobileColFocus {
@@ -817,6 +819,14 @@ pub struct App {
     pub animations_enabled: bool,
     pub settings_open: bool,
     pub settings_selected: usize,
+    /// Active tab in settings: 0 = General, 1 = Plugins.
+    pub settings_tab: usize,
+    /// Plugin list scroll offset in Plugins tab.
+    pub settings_plugin_scroll: usize,
+    /// Selected plugin index in Plugins tab.
+    pub settings_plugin_selected: usize,
+    /// Loaded plugin configurations (plugin_id -> config).
+    pub plugin_configs: std::collections::HashMap<String, orbit_plugin::PluginConfig>,
     /// Set when orbtd acknowledges an UploadPayload with the remote path.
     /// events.rs drains this and injects the path as PTY input.
     pub pending_payload_path: Option<String>,
@@ -1044,6 +1054,10 @@ impl App {
             animations_enabled: true,
             settings_open: false,
             settings_selected: 0,
+            settings_tab: 0,
+            settings_plugin_scroll: 0,
+            settings_plugin_selected: 0,
+            plugin_configs: Self::discover_plugin_configs(),
             pending_payload_path: None,
             mobile_mode: cols < 80 || rows < 25,
             mobile_view: MobileView::Terminal,
@@ -1060,6 +1074,67 @@ impl App {
             inspect_overlay: None,
             pending_osc52: None,
         }
+    }
+
+    fn discover_plugin_configs() -> std::collections::HashMap<String, orbit_plugin::PluginConfig> {
+        let mut configs = std::collections::HashMap::new();
+        let home = std::env::var("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|_| std::path::PathBuf::from("~"));
+
+        // Check multiple locations: user home, current dir (dev), and ORBT_MODULES env
+        let mut search_dirs = vec![home.join(".orbit").join("modules")];
+
+        if let Ok(cwd) = std::env::current_dir() {
+            search_dirs.push(cwd.join(".orbit").join("modules"));
+        }
+
+        if let Ok(custom) = std::env::var("ORBT_MODULES") {
+            search_dirs.push(std::path::PathBuf::from(custom));
+        }
+
+        for modules_dir in search_dirs {
+            tracing::debug!("scanning for plugins in: {}", modules_dir.display());
+
+            if !modules_dir.exists() {
+                tracing::debug!("modules dir not found: {}", modules_dir.display());
+                continue;
+            }
+
+            let scanner = orbit_plugin::loader::PluginScanner::new(modules_dir);
+
+            match scanner.scan() {
+                Ok(plugins) => {
+                    tracing::info!("discovered {} plugins", plugins.len());
+                    for (_, manifest) in plugins {
+                        let plugin_id = manifest.id.to_string();
+                        let config_path = home
+                            .join(".orbit")
+                            .join("plugin-configs")
+                            .join(format!("{}.toml", manifest.id.to_path_segment()));
+
+                        match orbit_plugin::PluginConfig::load(
+                            manifest.id.clone(),
+                            manifest.config_schema.clone(),
+                            config_path,
+                        ) {
+                            Ok(config) => {
+                                tracing::info!("loaded config for plugin: {}", plugin_id);
+                                configs.insert(plugin_id, config);
+                            }
+                            Err(e) => {
+                                tracing::warn!("failed to load config for {}: {}", plugin_id, e);
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("failed to scan plugins: {}", e);
+                }
+            }
+        }
+
+        configs
     }
 
     pub fn queue_osc52_copy(&mut self, text: &str) {
@@ -1597,6 +1672,7 @@ impl App {
                     .retain(|id, _| state.agents.iter().any(|a| a.id == *id));
                 self.sort_agents();
                 self.needs_redraw = true;
+                self.needs_resize = true;
             }
             ServerEvent::PaneOutput { pane_id, data } => {
                 if let Some(sel) = &self.selection {

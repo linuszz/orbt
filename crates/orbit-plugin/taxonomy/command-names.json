@@ -1,0 +1,804 @@
+{
+  "$schema": "internal/orbit-command-names-v1",
+  "version": 1,
+  "last_updated": "2026-10-07",
+  "description": "Orbit Daemon 内建 Command 白名单。每个 Command 派生自 [00-orbit-baseline §5](../../00-orbit-baseline.md#5-操作基线command-必须映射到这些操作) 中的 orbitd 操作。",
+  "commands": {
+    "pane.send-text": {
+      "owner": "Daemon",
+      "cli_alias": "(orbit sat msg with target pane)",
+      "derives_from": "orbit_io::pty::writer.write(text, submit)",
+      "requires_capability": "command.pane-write",
+      "default_scope": {
+        "target": "self"
+      },
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 16384
+          },
+          "submit": {
+            "type": "boolean",
+            "default": true
+          }
+        }
+      }
+    },
+    "pane.send-key": {
+      "owner": "Daemon",
+      "derives_from": "orbit_io::pty::writer.write_key",
+      "requires_capability": "command.pane-write",
+      "default_scope": {
+        "target": "self"
+      },
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "modifiers": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": [
+                "Ctrl",
+                "Alt",
+                "Meta",
+                "Shift"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "pane.intervene": {
+      "owner": "Daemon",
+      "derives_from": "orbit_agent::interrupt_pane",
+      "requires_capability": "command.pane-intervene",
+      "default_scope": {
+        "pane_id": "self"
+      },
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "maxLength": 500
+          }
+        }
+      }
+    },
+    "pane.split": {
+      "owner": "Daemon",
+      "cli_alias": "orbit port split h|v",
+      "derives_from": "orbit_core::pane::PaneManager::split",
+      "requires_capability": "command.pane-split",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "axis": {
+            "type": "string",
+            "enum": [
+              "horizontal",
+              "vertical"
+            ],
+            "default": "horizontal"
+          },
+          "pane_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pane.close": {
+      "owner": "Daemon",
+      "cli_alias": "orbit port close",
+      "derives_from": "orbit_core::pane::PaneManager::close",
+      "requires_capability": "command.pane-close",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "pane_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pane.resize": {
+      "owner": "Daemon",
+      "cli_alias": "(无 CLI 暴露；UI 拖拽)",
+      "derives_from": "orbit_io::pty::resize",
+      "requires_capability": "command.pane-resize",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "pane_id": {
+            "type": "string"
+          },
+          "delta": {
+            "type": "object",
+            "properties": {
+              "cols": {
+                "type": "i32"
+              },
+              "rows": {
+                "type": "i32"
+              }
+            }
+          }
+        }
+      }
+    },
+    "pane.focus": {
+      "owner": "Daemon",
+      "cli_alias": "orbit port focus <id>",
+      "derives_from": "orbit_core::pane::PaneManager::focus",
+      "requires_capability": "command.pane-focus",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "pane_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "pane.title-set": {
+      "owner": "Daemon",
+      "derives_from": "orbit_tui::pane::widget::set_title",
+      "requires_capability": "command.pane-title",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "pane_id",
+          "title"
+        ],
+        "properties": {
+          "pane_id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "pane.query-state": {
+      "owner": "Daemon",
+      "derives_from": "orbit_core::pane::Pane::state",
+      "requires_capability": "query.pane",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "pane_id"
+        ],
+        "properties": {
+          "pane_id": {
+            "type": "string"
+          }
+        }
+      },
+      "return_schema": {
+        "$ref": "PaneState"
+      }
+    },
+    "tab.create": {
+      "owner": "Daemon",
+      "cli_alias": "orbit deck new",
+      "derives_from": "orbit_core::session::Tab::create",
+      "requires_capability": "command.tab-create",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 200
+          }
+        }
+      }
+    },
+    "tab.close": {
+      "owner": "Daemon",
+      "derives_from": "orbit_core::session::Tab::close",
+      "requires_capability": "command.tab-close",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "tab_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tab.focus": {
+      "owner": "Daemon",
+      "cli_alias": "orbit deck next/prev",
+      "derives_from": "orbit_core::session::Tab::focus",
+      "requires_capability": "command.tab-focus",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "tab_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "window.layout-set": {
+      "owner": "Daemon",
+      "derives_from": "LayoutEngine::apply_kdl",
+      "requires_capability": "command.window-layout",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "kdl"
+        ],
+        "properties": {
+          "kdl": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "window.layout-save": {
+      "owner": "Daemon",
+      "derives_from": "LayoutEngine::save",
+      "requires_capability": "command.window-layout",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "window.layout-load": {
+      "owner": "Daemon",
+      "derives_from": "LayoutEngine::load",
+      "requires_capability": "command.window-layout",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agent.list": {
+      "owner": "Daemon",
+      "cli_alias": "orbit sat list",
+      "derives_from": "orbit_agent::registry::list",
+      "requires_capability": "query.agent",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_schema": {
+        "type": "array",
+        "items": {
+          "$ref": "AgentInfo"
+        }
+      }
+    },
+    "agent.get": {
+      "owner": "Daemon",
+      "cli_alias": "orbit sat status <id>",
+      "derives_from": "orbit_agent::registry::get",
+      "requires_capability": "query.agent",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          }
+        }
+      },
+      "return_schema": {
+        "$ref": "AgentInfo"
+      }
+    },
+    "agent.launch": {
+      "owner": "Daemon",
+      "cli_alias": "orbit sat launch <kind>",
+      "derives_from": "orbit_agent::spawn",
+      "requires_capability": "command.agent-dispatch",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "working_dir": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agent.dispatch": {
+      "owner": "Daemon",
+      "cli_alias": "orbit sat msg <id>",
+      "derives_from": "orbit_agent::dispatch_prompt",
+      "requires_capability": "command.agent-dispatch",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "agent_id",
+          "prompt"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 32768
+          },
+          "interrupt_current": {
+            "type": "boolean",
+            "default": false
+          }
+        }
+      }
+    },
+    "agent.batch-dispatch": {
+      "owner": "Daemon",
+      "cli_alias": "(无 CLI；Plugin 入口)",
+      "derives_from": "orbit_agent::batch_dispatch",
+      "requires_capability": "command.agent-batch",
+      "additional_capabilities": [
+        "command.agent-dispatch"
+      ],
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "agent_ids",
+          "prompt"
+        ],
+        "properties": {
+          "agent_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "minItems": 1
+          },
+          "prompt": {
+            "type": "string",
+            "maxLength": 32768
+          }
+        }
+      },
+      "return_schema": {
+        "$ref": "BatchDispatchResult"
+      },
+      "returns_mode": "best-effort-only",
+      "REV-2026-10-07": "Q1: best-effort only — all-or-nothing 不可达（prompt 物理上不可撤回）"
+    },
+    "agent.interrupt": {
+      "owner": "Daemon",
+      "derives_from": "orbit_agent::interrupt",
+      "requires_capability": "command.agent-interrupt",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "agent.set-policy": {
+      "owner": "Daemon",
+      "cli_alias": "orbit sat config",
+      "derives_from": "orbit_agent::set_policy",
+      "requires_capability": "command.agent-policy",
+      "args_schema": {
+        "type": "object",
+        "properties": {
+          "agent_kind": {
+            "type": "string"
+          },
+          "max_concurrent": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "rate_limit_per_min": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "agent.subscribe-state": {
+      "owner": "Daemon",
+      "derives_from": "orbit_agent::subscribe_state",
+      "requires_capability": "perceive.agent-state",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "agent_id"
+        ],
+        "properties": {
+          "agent_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "image.last": {
+      "owner": "Daemon",
+      "cli_alias": "orbit downlink last",
+      "derives_from": "orbit_io::image::last",
+      "requires_capability": "command.image-read",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "image.save": {
+      "owner": "Daemon",
+      "cli_alias": "orbit downlink save <path>",
+      "derives_from": "orbit_io::image::save",
+      "requires_capability": "command.image-read",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "file.upload": {
+      "owner": "Daemon",
+      "cli_alias": "orbit payload up <path>",
+      "derives_from": "orbit_io::transfer::upload",
+      "requires_capability": "command.file-write",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "path"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "file.download": {
+      "owner": "Daemon",
+      "cli_alias": "orbit payload down <name>",
+      "derives_from": "orbit_io::transfer::download",
+      "requires_capability": "command.file-read",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "dest": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "clipboard.send": {
+      "owner": "Daemon",
+      "cli_alias": "orbit beacon send",
+      "derives_from": "orbit_io::clipboard::send",
+      "requires_capability": "command.clipboard-write",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "clipboard.receive": {
+      "owner": "Daemon",
+      "cli_alias": "orbit beacon recv",
+      "derives_from": "orbit_io::clipboard::receive",
+      "requires_capability": "command.clipboard-read",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_schema": {
+        "type": "string"
+      }
+    },
+    "clipboard.sync": {
+      "owner": "Daemon",
+      "cli_alias": "orbit beacon sync",
+      "derives_from": "orbit_io::clipboard::sync",
+      "requires_capability": "command.clipboard-write",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "session.list": {
+      "owner": "Daemon",
+      "cli_alias": "orbit session list",
+      "derives_from": "orbit_core::session::SessionManager::list",
+      "requires_capability": "query.session",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_schema": {
+        "type": "array",
+        "items": {
+          "$ref": "SessionInfo"
+        }
+      }
+    },
+    "session.switch": {
+      "owner": "Daemon",
+      "cli_alias": "orbit session switch <id>",
+      "derives_from": "orbit_core::session::SessionManager::activate",
+      "requires_capability": "command.session-control",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "session.rename": {
+      "owner": "Daemon",
+      "cli_alias": "orbit session rename <old> <new>",
+      "derives_from": "orbit_core::session::SessionManager::rename",
+      "requires_capability": "command.session-control",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "session_id",
+          "new_name"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          },
+          "new_name": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "session.kill": {
+      "owner": "Daemon",
+      "cli_alias": "orbit session kill <id>",
+      "derives_from": "orbit_core::session::SessionManager::kill",
+      "requires_capability": "command.session-control",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "session_id"
+        ],
+        "properties": {
+          "session_id": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "plugin.toggle-surface": {
+      "owner": "Plugin",
+      "derives_from": "orbit_plugin::runtime::toggle_surface",
+      "requires_capability": "render.surface-toggle",
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "surface_id",
+          "visible"
+        ],
+        "properties": {
+          "surface_id": {
+            "type": "string"
+          },
+          "visible": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "plugin.show-modal": {
+      "owner": "Plugin",
+      "derives_from": "orbit_tui::floating::FloatingPane::show",
+      "requires_capability": "modal.show",
+      "anti_spam": {
+        "default_per_minute": 5
+      },
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "modal_id",
+          "payload"
+        ],
+        "properties": {
+          "modal_id": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "plugin.show-toast": {
+      "owner": "Plugin",
+      "derives_from": "orbit_tui::floating::FloatingPane::show_chip",
+      "requires_capability": "notify.show",
+      "anti_spam": {
+        "default_per_minute": 10
+      },
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "text"
+        ],
+        "properties": {
+          "text": {
+            "type": "string",
+            "maxLength": 500
+          },
+          "timeout_ms": {
+            "type": "integer",
+            "minimum": 1000,
+            "maximum": 60000,
+            "default": 5000
+          }
+        }
+      }
+    },
+    "plugin.notify-bus": {
+      "owner": "Plugin",
+      "derives_from": "orbit_plugin::bus::publish",
+      "requires_capability": "bus.publish",
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "topic",
+          "payload"
+        ],
+        "properties": {
+          "topic": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "payload": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "plugin.deactivate-self": {
+      "owner": "Plugin",
+      "derives_from": "orbit_plugin::runtime::deactivate",
+      "requires_capability": null,
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "REV-2026-10-07": "C11 豁免：Plugin 主动停用自己不需要任何 capability（停用是 Plugin 的固有权利，类似程序 exit）"
+    },
+    "config.get": {
+      "owner": "Daemon",
+      "derives_from": "orbit_config::get",
+      "requires_capability": "config.read",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        }
+      },
+      "return_schema": {
+        "type": "object"
+      }
+    },
+    "config.set": {
+      "owner": "Daemon",
+      "derives_from": "orbit_config::set",
+      "requires_capability": "config.write",
+      "args_schema": {
+        "type": "object",
+        "required": [
+          "key",
+          "value"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "config.show-ui": {
+      "owner": "Plugin",
+      "derives_from": "orbit_plugin::config::show_ui",
+      "requires_capability": "config.ui-show",
+      "private": true,
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      }
+    },
+    "module.list": {
+      "owner": "Daemon",
+      "cli_alias": "orbit module list",
+      "derives_from": "orbit_plugin::loader::list",
+      "requires_capability": "query.plugin",
+      "args_schema": {
+        "type": "object",
+        "properties": {}
+      },
+      "return_schema": {
+        "type": "array",
+        "items": {
+          "$ref": "PluginInfo"
+        }
+      }
+    }
+  }
+}

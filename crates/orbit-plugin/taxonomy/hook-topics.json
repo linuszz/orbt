@@ -1,0 +1,481 @@
+{
+  "$schema": "internal/orbit-hook-topics-v1",
+  "version": 1,
+  "last_updated": "2026-10-07",
+  "description": "Orbit Plugin Hook topic 白名单。每个 topic 的 payload 字段对应 orbitd 中产生该事件的子系统（详见 [00-orbit-baseline §4](../../00-orbit-baseline.md#4-事件源基线hook-topic-必须派生自这些源)）。",
+  "topics": {
+    "pane.output": {
+      "mode": "stream",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "pane_id": {
+          "type": "string",
+          "indexed": true
+        },
+        "pane_kind": {
+          "type": "string",
+          "enum": [
+            "shell",
+            "agent",
+            "plugin",
+            "any"
+          ],
+          "default": "any",
+          "indexed": true
+        },
+        "agent_kind": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "pane_id": "string",
+        "chunk": "bytes",
+        "region": "Rect?"
+      },
+      "source": "orbit_io::pty::on_output (via vte::Parser)",
+      "requires_capability": "perceive.pane-output"
+    },
+    "pane.output.match": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "pane_id": {
+          "type": "string",
+          "indexed": true
+        },
+        "pattern_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "pane_id": "string",
+        "pattern_id": "string",
+        "span": "Rect",
+        "matched_text": "string"
+      },
+      "source": "orbit_io::pty::on_output + orbit_plugin::pattern_index::match",
+      "requires_capability": "perceive.pane-output-match"
+    },
+    "pane.exit": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "pane_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "pane_id": "string",
+        "exit_code": "i32?",
+        "signal": "i32?"
+      },
+      "source": "orbit_io::pty::on_exit",
+      "requires_capability": "perceive.pane-exit"
+    },
+    "pane.focus": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "pane_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "pane_id": "string",
+        "prev_pane_id": "string?"
+      },
+      "source": "orbit_core::pane::PaneManager::focus_change",
+      "requires_capability": "perceive.pane-focus"
+    },
+    "pane.resize": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "pane_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "pane_id": "string",
+        "cols": "u16",
+        "rows": "u16"
+      },
+      "source": "orbit_io::pty::PtySize change",
+      "requires_capability": "perceive.pane-resize"
+    },
+    "tab.created": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "space_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "tab_id": "string",
+        "space_id": "string",
+        "name": "string?"
+      },
+      "source": "orbit_core::session::Tab::on_create",
+      "requires_capability": "perceive.tab-lifecycle"
+    },
+    "tab.closed": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "tab_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "tab_id": "string",
+        "space_id": "string"
+      },
+      "source": "orbit_core::session::Tab::on_close",
+      "requires_capability": "perceive.tab-lifecycle"
+    },
+    "window.layout-changed": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "window_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "window_id": "string",
+        "layout_tree": "KdlDoc"
+      },
+      "source": "orbit_core::layout::LayoutEngine::apply_diff",
+      "requires_capability": "perceive.layout-change"
+    },
+    "space.activated": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "space_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "space_id": "string",
+        "prev_space_id": "string?"
+      },
+      "source": "orbit_core::session::SessionManager::activate_space",
+      "requires_capability": "perceive.space-lifecycle"
+    },
+    "session.started": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {},
+      "payload": {
+        "session_id": "string"
+      },
+      "source": "orbit_core::session::SessionManager::startup",
+      "requires_capability": "perceive.session-lifecycle"
+    },
+    "session.ending": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {},
+      "payload": {
+        "session_id": "string"
+      },
+      "source": "orbit_core::session::SessionManager::shutdown",
+      "requires_capability": "perceive.session-lifecycle"
+    },
+    "session.status": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {},
+      "payload": {
+        "session_id": "string",
+        "health": "string",
+        "active_agents": "u32"
+      },
+      "source": "orbit_core::session::SessionManager::heartbeat",
+      "requires_capability": "perceive.session-status"
+    },
+    "agent.detected": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "agent_kind": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "agent_id": "string",
+        "kind": "string",
+        "working_dir": "string",
+        "argv": "Vec<string>"
+      },
+      "source": "orbit_agent::detector::on_detect",
+      "requires_capability": "perceive.agent-detected"
+    },
+    "agent.state": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "agent_id": {
+          "type": "string",
+          "indexed": true
+        },
+        "state": {
+          "type": "string",
+          "enum": [
+            "idle",
+            "working",
+            "blocked",
+            "done",
+            "errored"
+          ],
+          "indexed": true
+        }
+      },
+      "payload": {
+        "agent_id": "string",
+        "new_state": "string",
+        "prev_state": "string?",
+        "since_ms": "u64",
+        "reason": "string?"
+      },
+      "source": "orbit_agent::state::StateMachine::transition",
+      "state_enum": "orbit_agent::AgentStatus { Idle, Working, Blocked, Done, Errored }",
+      "REV-2026-10-07": "B5: 4 主态 + 1 error 终态；errored 是 done 的特殊分支",
+      "requires_capability": "perceive.agent-state"
+    },
+    "agent.task-started": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "agent_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "agent_id": "string",
+        "task_id": "string",
+        "prompt_summary": "string"
+      },
+      "source": "orbit_agent::state (transition to Working)",
+      "requires_capability": "perceive.agent-task"
+    },
+    "agent.task-finished": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "agent_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "agent_id": "string",
+        "task_id": "string",
+        "status": "string",
+        "summary": "string",
+        "tokens": "u64?"
+      },
+      "source": "orbit_agent::state (transition to Done)",
+      "requires_capability": "perceive.agent-task"
+    },
+    "agent.tool-called": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "agent_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "agent_id": "string",
+        "tool_name": "string",
+        "args_summary": "string",
+        "result_kind": "string"
+      },
+      "source": "orbit_agent::mcp::on_tool_call",
+      "requires_capability": "perceive.agent-tool"
+    },
+    "key.event": {
+      "mode": "edge",
+      "default_delivery": "sync",
+      "filterable_fields": {
+        "target_context": {
+          "type": "string",
+          "enum": [
+            "self",
+            "any"
+          ],
+          "default": "any",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "key": "crossterm::event::KeyCode",
+        "modifiers": "crossterm::event::KeyModifiers",
+        "target_context": "string"
+      },
+      "source": "crossterm::event::Event::Key → orbit_input::router::dispatch (post prefix-key filter)",
+      "keymap_constraint": "Plugin key 必须通过 ORBIT_PREFIX_KEY 系统注册（详见 orbit-baseline §8）",
+      "requires_capability": "perceive.input-event"
+    },
+    "mouse.event": {
+      "mode": "edge",
+      "default_delivery": "sync",
+      "filterable_fields": {
+        "target_context": {
+          "type": "string",
+          "enum": [
+            "self",
+            "any"
+          ],
+          "default": "any",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "kind": "MouseKind",
+        "x": "u16",
+        "y": "u16",
+        "button": "MouseButton?",
+        "target_context": "string"
+      },
+      "source": "crossterm::event::Event::Mouse → orbit_input::router::dispatch",
+      "requires_capability": "perceive.input-event"
+    },
+    "plugin.loaded": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "plugin_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "plugin_id": "string",
+        "version": "string",
+        "reason": {
+          "type": "string",
+          "enum": [
+            "install",
+            "startup",
+            "user-action",
+            "auto-bind"
+          ]
+        }
+      },
+      "source": "orbit_plugin::loader::on_load",
+      "requires_capability": "perceive.plugin-lifecycle"
+    },
+    "plugin.unloaded": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "plugin_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "plugin_id": "string",
+        "reason": {
+          "type": "string",
+          "enum": [
+            "user-action",
+            "shutdown",
+            "upgrade",
+            "error"
+          ]
+        }
+      },
+      "source": "orbit_plugin::loader::on_unload",
+      "requires_capability": "perceive.plugin-lifecycle"
+    },
+    "plugin.errored": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "plugin_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "plugin_id": "string",
+        "reason": "string",
+        "code": "string"
+      },
+      "source": "orbit_plugin::runtime::on_panic",
+      "requires_capability": "perceive.plugin-lifecycle"
+    },
+    "plugin.deactivated": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "plugin_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "plugin_id": "string",
+        "reason": {
+          "type": "string",
+          "enum": [
+            "user-action",
+            "context-unbound",
+            "shutdown",
+            "upgrade"
+          ]
+        }
+      },
+      "source": "orbit_plugin::runtime::on_deactivate",
+      "requires_capability": "perceive.plugin-lifecycle"
+    },
+    "bus.message": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "topic": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": "any",
+      "source": "orbit_plugin::bus::publish",
+      "requires_capability": "perceive.bus-message"
+    },
+    "config.changed": {
+      "mode": "edge",
+      "default_delivery": "async",
+      "filterable_fields": {
+        "plugin_id": {
+          "type": "string",
+          "indexed": true
+        }
+      },
+      "payload": {
+        "plugin_id": "string",
+        "key": "string",
+        "value": "any"
+      },
+      "source": "orbit_config::notify_change",
+      "requires_capability": "config.read",
+      "REV-2026-10-07": "C11 破例：其它 topic 用 perceive.* capability；此处用 config.read 因为 Hook 通知的是 config 变化（Plugin 已经持有 config.read 才能订阅——没有读取权就不可能相关）"
+    }
+  }
+}

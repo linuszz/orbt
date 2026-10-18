@@ -173,6 +173,11 @@ where
                             capabilities: orbt_protocol::Capabilities::default(),
                             state: s,
                         }).await;
+                        let sm = Arc::clone(&space_manager);
+                        tokio::spawn(async move {
+                            tokio::time::sleep(tokio::time::Duration::from_millis(80)).await;
+                            sm.nudge_all_spaces().await;
+                        });
                     }
                     ClientMessage::CopyToClipboard { text } => {
                         if let Ok(mut cb) = Clipboard::new() {

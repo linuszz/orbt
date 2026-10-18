@@ -1,0 +1,779 @@
+{
+  "$schema": "internal/orbit-capability-names-v1",
+  "version": 1,
+  "last_updated": "2026-10-07",
+  "description": "Orbit Plugin Capability 白名单。每个 capability 必须对应 [00-orbit-baseline §11](../../00-orbit-baseline.md#11-capability--基线子系统映射) 中的 orbitd 子系统。",
+  "capabilities": {
+    "perceive.pane-output": {
+      "verb": "perceive",
+      "domain": "pane-output",
+      "subsystem": "orbit_io::pty::on_output",
+      "enabled_hook": "pane.output",
+      "allowed_scopes": [
+        "pane_id",
+        "pane_kind",
+        "agent_kind",
+        "phase"
+      ],
+      "default_scope": {
+        "phase": "self"
+      },
+      "default_scope_rationale": "REV-2026-10-07 决策 #8：读侧对称默认 self，避免 Session 级 Plugin 默认读全部 Pane 字节流",
+      "description": "感知 PTY 原始字节流"
+    },
+    "perceive.pane-output-match": {
+      "verb": "perceive",
+      "domain": "pane-output-match",
+      "subsystem": "orbit_io::pty::on_output + orbit_plugin::pattern_index",
+      "enabled_hook": "pane.output.match",
+      "allowed_scopes": [
+        "pane_id",
+        "pattern_id",
+        "phase"
+      ],
+      "default_scope": {
+        "pane_id": "self"
+      },
+      "description": "感知 Pane 输出的 pattern 匹配边沿事件"
+    },
+    "perceive.pane-exit": {
+      "verb": "perceive",
+      "domain": "pane-exit",
+      "subsystem": "orbit_io::pty::on_exit",
+      "enabled_hook": "pane.exit",
+      "allowed_scopes": [
+        "pane_id"
+      ],
+      "default_scope": {
+        "pane_id": "self"
+      }
+    },
+    "perceive.pane-focus": {
+      "verb": "perceive",
+      "domain": "pane-focus",
+      "subsystem": "orbit_core::pane::PaneManager::focus_change",
+      "enabled_hook": "pane.focus",
+      "allowed_scopes": [
+        "pane_id"
+      ],
+      "default_scope": {
+        "pane_id": "self"
+      }
+    },
+    "perceive.pane-resize": {
+      "verb": "perceive",
+      "domain": "pane-resize",
+      "subsystem": "orbit_io::pty::PtySize change",
+      "enabled_hook": "pane.resize",
+      "allowed_scopes": [
+        "pane_id"
+      ],
+      "default_scope": {
+        "pane_id": "self"
+      }
+    },
+    "perceive.tab-lifecycle": {
+      "verb": "perceive",
+      "domain": "tab-lifecycle",
+      "subsystem": "orbit_core::session::Tab::on_create/on_close",
+      "enabled_hooks": [
+        "tab.created",
+        "tab.closed"
+      ],
+      "allowed_scopes": [
+        "space_id",
+        "tab_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.layout-change": {
+      "verb": "perceive",
+      "domain": "layout-change",
+      "subsystem": "orbit_core::layout::LayoutEngine::apply_diff",
+      "enabled_hook": "window.layout-changed",
+      "allowed_scopes": [
+        "window_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.space-lifecycle": {
+      "verb": "perceive",
+      "domain": "space-lifecycle",
+      "subsystem": "orbit_core::session::SessionManager::activate_space",
+      "enabled_hook": "space.activated",
+      "allowed_scopes": [
+        "space_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.session-lifecycle": {
+      "verb": "perceive",
+      "domain": "session-lifecycle",
+      "subsystem": "orbit_core::session::SessionManager::startup/shutdown",
+      "enabled_hooks": [
+        "session.started",
+        "session.ending"
+      ],
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "perceive.session-status": {
+      "verb": "perceive",
+      "domain": "session-status",
+      "subsystem": "orbit_core::session::SessionManager::heartbeat",
+      "enabled_hook": "session.status",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "perceive.agent-detected": {
+      "verb": "perceive",
+      "domain": "agent-detected",
+      "subsystem": "orbit_agent::detector::on_detect",
+      "enabled_hook": "agent.detected",
+      "allowed_scopes": [
+        "agent_kind"
+      ],
+      "default_scope": {}
+    },
+    "perceive.agent-state": {
+      "verb": "perceive",
+      "domain": "agent-state",
+      "subsystem": "orbit_agent::state::StateMachine::transition",
+      "enabled_hook": "agent.state",
+      "allowed_scopes": [
+        "agent_id",
+        "state"
+      ],
+      "default_scope": {
+        "state": [
+          "blocked",
+          "done"
+        ]
+      },
+      "default_scope_rationale": "默认只接收 blocked/done 转换；idle/working 高频，Plugin 按需扩"
+    },
+    "perceive.agent-task": {
+      "verb": "perceive",
+      "domain": "agent-task",
+      "subsystem": "orbit_agent::state (transitions)",
+      "enabled_hooks": [
+        "agent.task-started",
+        "agent.task-finished"
+      ],
+      "allowed_scopes": [
+        "agent_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.agent-tool": {
+      "verb": "perceive",
+      "domain": "agent-tool",
+      "subsystem": "orbit_agent::mcp::on_tool_call",
+      "enabled_hook": "agent.tool-called",
+      "allowed_scopes": [
+        "agent_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.input-event": {
+      "verb": "perceive",
+      "domain": "input-event",
+      "subsystem": "orbit_input::router::dispatch (post prefix-key filter)",
+      "enabled_hooks": [
+        "key.event",
+        "mouse.event"
+      ],
+      "allowed_scopes": [
+        "target_context"
+      ],
+      "default_scope": {
+        "target_context": "self"
+      },
+      "keymap_constraint": "Plugin key 必须通过 ORBIT_PREFIX_KEY 系统注册（详见 orbit-baseline §8）"
+    },
+    "perceive.plugin-lifecycle": {
+      "verb": "perceive",
+      "domain": "plugin-lifecycle",
+      "subsystem": "orbit_plugin::runtime / loader",
+      "enabled_hooks": [
+        "plugin.loaded",
+        "plugin.unloaded",
+        "plugin.errored",
+        "plugin.deactivated"
+      ],
+      "allowed_scopes": [
+        "plugin_id"
+      ],
+      "default_scope": {}
+    },
+    "perceive.bus-message": {
+      "verb": "perceive",
+      "domain": "bus-message",
+      "subsystem": "orbit_plugin::bus::publish",
+      "enabled_hook": "bus.message",
+      "allowed_scopes": [
+        "topic"
+      ],
+      "default_scope": {}
+    },
+    "perceive.sync-stream": {
+      "verb": "perceive",
+      "domain": "sync-stream",
+      "subsystem": "orbit_plugin::runtime (sync stream hook)",
+      "requires_runtime": "native",
+      "requires_capability": [
+        "runtime.native"
+      ],
+      "allowed_scopes": [],
+      "default_scope": {},
+      "description": "同步 stream Hook 派发（仅 Native Plugin）"
+    },
+    "command.pane-write": {
+      "verb": "command",
+      "domain": "pane-write",
+      "subsystem": "orbit_io::pty::writer.write",
+      "enabled_commands": [
+        "pane.send-text",
+        "pane.send-key"
+      ],
+      "allowed_scopes": [
+        "target",
+        "pane_id"
+      ],
+      "default_scope": {
+        "target": "self"
+      },
+      "description": "向 Pane 注入文本/按键（默认 self 范围）"
+    },
+    "command.pane-write-any": {
+      "verb": "command",
+      "domain": "pane-write-any",
+      "subsystem": "orbit_io::pty::writer.write",
+      "enabled_commands": [
+        "pane.send-text",
+        "pane.send-key"
+      ],
+      "allowed_scopes": [
+        "target"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true,
+      "requires_capability": [
+        "command.pane-write"
+      ],
+      "description": "跨 Context 注入 Pane（explicit 用户授权）"
+    },
+    "command.pane-intervene": {
+      "verb": "command",
+      "domain": "pane-intervene",
+      "subsystem": "orbit_agent::interrupt_pane",
+      "enabled_command": "pane.intervene",
+      "allowed_scopes": [
+        "pane_id"
+      ],
+      "default_scope": {
+        "pane_id": "self"
+      }
+    },
+    "command.pane-split": {
+      "verb": "command",
+      "domain": "pane-split",
+      "subsystem": "orbit_core::pane::PaneManager::split",
+      "enabled_command": "pane.split",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.pane-close": {
+      "verb": "command",
+      "domain": "pane-close",
+      "subsystem": "orbit_core::pane::PaneManager::close",
+      "enabled_command": "pane.close",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.pane-resize": {
+      "verb": "command",
+      "domain": "pane-resize",
+      "subsystem": "orbit_io::pty::resize",
+      "enabled_command": "pane.resize",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.pane-focus": {
+      "verb": "command",
+      "domain": "pane-focus",
+      "subsystem": "orbit_core::pane::PaneManager::focus",
+      "enabled_command": "pane.focus",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.pane-title": {
+      "verb": "command",
+      "domain": "pane-title",
+      "subsystem": "orbit_tui::pane::widget::set_title",
+      "enabled_command": "pane.title-set",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.tab-create": {
+      "verb": "command",
+      "domain": "tab-create",
+      "subsystem": "orbit_core::session::Tab::create",
+      "enabled_command": "tab.create",
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.tab-close": {
+      "verb": "command",
+      "domain": "tab-close",
+      "subsystem": "orbit_core::session::Tab::close",
+      "enabled_command": "tab.close",
+      "allowed_scopes": []
+    },
+    "command.tab-focus": {
+      "verb": "command",
+      "domain": "tab-focus",
+      "subsystem": "orbit_core::session::Tab::focus",
+      "enabled_command": "tab.focus",
+      "allowed_scopes": []
+    },
+    "command.window-layout": {
+      "verb": "command",
+      "domain": "window-layout",
+      "subsystem": "orbit_core::layout::LayoutEngine",
+      "enabled_commands": [
+        "window.layout-set",
+        "window.layout-save",
+        "window.layout-load"
+      ],
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.agent-dispatch": {
+      "verb": "command",
+      "domain": "agent-dispatch",
+      "subsystem": "orbit_agent::dispatch_prompt",
+      "enabled_commands": [
+        "agent.dispatch",
+        "agent.launch"
+      ],
+      "allowed_scopes": [
+        "agent_kind",
+        "agent_id"
+      ],
+      "default_scope": {}
+    },
+    "command.agent-batch": {
+      "verb": "command",
+      "domain": "agent-batch",
+      "subsystem": "orbit_agent::batch_dispatch",
+      "enabled_command": "agent.batch-dispatch",
+      "allowed_scopes": [
+        "mode"
+      ],
+      "default_scope": null,
+      "requires_capability": [
+        "command.agent-dispatch"
+      ],
+      "REV-2026-10-07": "Q1: best-effort only — all-or-nothing 物理不可达；default_scope 不再相关",
+      "description": "批量派发（仅 best-effort，逐条返回结果，详见 REV-2026-10-07 Q1）"
+    },
+    "command.agent-interrupt": {
+      "verb": "command",
+      "domain": "agent-interrupt",
+      "subsystem": "orbit_agent::interrupt",
+      "enabled_command": "agent.interrupt",
+      "allowed_scopes": []
+    },
+    "command.agent-policy": {
+      "verb": "command",
+      "domain": "agent-policy",
+      "subsystem": "orbit_agent::set_policy",
+      "enabled_command": "agent.set-policy",
+      "allowed_scopes": []
+    },
+    "command.image-read": {
+      "verb": "command",
+      "domain": "image-read",
+      "subsystem": "orbit_io::image",
+      "enabled_commands": [
+        "image.last",
+        "image.save"
+      ],
+      "allowed_scopes": [],
+      "default_scope": {}
+    },
+    "command.file-read": {
+      "verb": "command",
+      "domain": "file-read",
+      "subsystem": "orbit_io::transfer",
+      "enabled_command": "file.download",
+      "allowed_scopes": [
+        "path"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "command.file-write": {
+      "verb": "command",
+      "domain": "file-write",
+      "subsystem": "orbit_io::transfer",
+      "enabled_command": "file.upload",
+      "allowed_scopes": [
+        "path"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "command.clipboard-read": {
+      "verb": "command",
+      "domain": "clipboard-read",
+      "subsystem": "orbit_io::clipboard::receive",
+      "enabled_command": "clipboard.receive",
+      "allowed_scopes": []
+    },
+    "command.clipboard-write": {
+      "verb": "command",
+      "domain": "clipboard-write",
+      "subsystem": "orbit_io::clipboard::send/sync",
+      "enabled_commands": [
+        "clipboard.send",
+        "clipboard.sync"
+      ],
+      "allowed_scopes": []
+    },
+    "command.session-control": {
+      "verb": "command",
+      "domain": "session-control",
+      "subsystem": "orbit_core::session::SessionManager",
+      "enabled_commands": [
+        "session.switch",
+        "session.rename",
+        "session.kill"
+      ],
+      "allowed_scopes": [],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "query.pane": {
+      "verb": "query",
+      "domain": "pane",
+      "subsystem": "orbit_core::pane::Pane::state",
+      "enabled_command": "pane.query-state",
+      "allowed_scopes": []
+    },
+    "query.agent": {
+      "verb": "query",
+      "domain": "agent",
+      "subsystem": "orbit_agent::registry",
+      "enabled_commands": [
+        "agent.list",
+        "agent.get"
+      ],
+      "allowed_scopes": []
+    },
+    "query.layout": {
+      "verb": "query",
+      "domain": "layout",
+      "subsystem": "LayoutEngine::current_tree",
+      "allowed_scopes": []
+    },
+    "query.session": {
+      "verb": "query",
+      "domain": "session",
+      "subsystem": "orbit_core::session::Session::metadata",
+      "enabled_command": "session.list",
+      "allowed_scopes": []
+    },
+    "query.plugin": {
+      "verb": "query",
+      "domain": "plugin",
+      "subsystem": "orbit_plugin::loader::list",
+      "enabled_command": "module.list",
+      "allowed_scopes": []
+    },
+    "render.pane-overlay": {
+      "verb": "render",
+      "domain": "pane-overlay",
+      "subsystem": "orbit_tui::widgets::PaneWidget",
+      "enabled_surface": "pane-overlay",
+      "allowed_scopes": []
+    },
+    "render.pane-title": {
+      "verb": "render",
+      "domain": "pane-title",
+      "subsystem": "orbit_core::pane::Pane.title (suffix append)",
+      "enabled_surface": "pane-title",
+      "allowed_scopes": []
+    },
+    "render.pane-border-badge": {
+      "verb": "render",
+      "domain": "pane-border-badge",
+      "subsystem": "orbit_tui::widgets::PaneBorder",
+      "enabled_surface": "pane-border-badge",
+      "allowed_scopes": []
+    },
+    "render.tab-bar-slot": {
+      "verb": "render",
+      "domain": "tab-bar-slot",
+      "subsystem": "orbit_tui::widgets::TabBar",
+      "enabled_surface": "tab-bar-slot",
+      "allowed_scopes": []
+    },
+    "render.tab-bar-badge": {
+      "verb": "render",
+      "domain": "tab-bar-badge",
+      "subsystem": "orbit_tui::widgets::TabBar (single Tab)",
+      "enabled_surface": "tab-bar-badge",
+      "allowed_scopes": []
+    },
+    "render.status-bar-slot": {
+      "verb": "render",
+      "domain": "status-bar-slot",
+      "subsystem": "orbit_tui::widgets::StatusBar",
+      "enabled_surface": "status-bar-slot",
+      "allowed_scopes": [
+        "position"
+      ],
+      "default_scope": {
+        "position": "right"
+      }
+    },
+    "render.extension-rail": {
+      "verb": "render",
+      "domain": "extension-rail",
+      "subsystem": "orbit_tui::widgets::SpacesSidebar (bottom)",
+      "enabled_surface": "extension-rail",
+      "allowed_scopes": []
+    },
+    "render.plugin-dock": {
+      "verb": "render",
+      "domain": "plugin-dock",
+      "subsystem": "orbit_tui::widgets::AgentMonitorSidebar",
+      "enabled_surface": "plugin-dock",
+      "allowed_scopes": [],
+      "exclusive_constraint": "与 agent-monitor-dock 互斥（详见 01 §3.2）"
+    },
+    "render.agent-monitor-dock": {
+      "verb": "render",
+      "domain": "agent-monitor-dock",
+      "subsystem": "orbit_tui::widgets::AgentMonitorSidebar (子类，专供内置 Plugin)",
+      "enabled_surface": "agent-monitor-dock",
+      "allowed_scopes": [],
+      "exclusive_constraint": "与 plugin-dock 互斥"
+    },
+    "render.subcard-slot": {
+      "verb": "render",
+      "domain": "subcard-slot",
+      "subsystem": "orbit_tui::widgets::AgentCard",
+      "enabled_surface": "subcard-slot",
+      "allowed_scopes": [
+        "host"
+      ]
+    },
+    "render.modal": {
+      "verb": "render",
+      "domain": "modal",
+      "subsystem": "orbit_tui::floating::FloatingPane",
+      "enabled_surface": "modal",
+      "allowed_scopes": []
+    },
+    "render.floating-chip": {
+      "verb": "render",
+      "domain": "floating-chip",
+      "subsystem": "orbit_tui::floating::FloatingPane",
+      "enabled_surface": "floating-chip",
+      "allowed_scopes": []
+    },
+    "render.context-menu-item": {
+      "verb": "render",
+      "domain": "context-menu-item",
+      "subsystem": "orbit_tui::floating::ContextMenu",
+      "enabled_surface": "context-menu-item",
+      "allowed_scopes": []
+    },
+    "render.surface-toggle": {
+      "verb": "render",
+      "domain": "surface-toggle",
+      "subsystem": "orbit_plugin::runtime::toggle_surface",
+      "allowed_scopes": []
+    },
+    "modal.show": {
+      "verb": "modal",
+      "domain": "show",
+      "subsystem": "orbit_tui::floating::FloatingPane::show",
+      "allowed_scopes": [],
+      "anti_spam_default_per_minute": 5
+    },
+    "modal.show-anytime": {
+      "verb": "modal",
+      "domain": "show-anytime",
+      "subsystem": "orbit_tui::floating::FloatingPane::show (bypass focus mode)",
+      "allowed_scopes": []
+    },
+    "notify.show": {
+      "verb": "notify",
+      "domain": "show",
+      "subsystem": "orbit_tui::floating::FloatingPane::show_chip",
+      "allowed_scopes": [],
+      "anti_spam_default_per_minute": 10
+    },
+    "notify.show-anytime": {
+      "verb": "notify",
+      "domain": "show-anytime",
+      "subsystem": "orbit_tui::floating::FloatingPane::show_chip (bypass focus mode)",
+      "allowed_scopes": []
+    },
+    "input.consume-key": {
+      "verb": "input",
+      "domain": "consume-key",
+      "subsystem": "orbit_input::router (consume flag)",
+      "allowed_scopes": []
+    },
+    "input.consume-mouse": {
+      "verb": "input",
+      "domain": "consume-mouse",
+      "subsystem": "orbit_input::router (consume flag)",
+      "allowed_scopes": []
+    },
+    "input.bind-shortcut": {
+      "verb": "input",
+      "domain": "bind-shortcut",
+      "subsystem": "orbit_input::keymap::register (Plugin key 走 ORBIT_PREFIX_KEY 系统)",
+      "allowed_scopes": []
+    },
+    "store.read": {
+      "verb": "store",
+      "domain": "read",
+      "subsystem": "Plugin Store path（~/.orbit/modules/<ns>_<name>/<version>/state/）",
+      "allowed_scopes": []
+    },
+    "store.write": {
+      "verb": "store",
+      "domain": "write",
+      "subsystem": "Plugin Store path",
+      "allowed_scopes": []
+    },
+    "store.read-other": {
+      "verb": "store",
+      "domain": "read-other",
+      "subsystem": "Plugin Store path (cross-namespace, 需白名单)",
+      "allowed_scopes": [
+        "namespace"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "store.write-other": {
+      "verb": "store",
+      "domain": "write-other",
+      "subsystem": "Plugin Store path (cross-namespace)",
+      "allowed_scopes": [
+        "namespace"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "store.encrypted": {
+      "verb": "store",
+      "domain": "encrypted",
+      "subsystem": "Plugin Store path (encrypted layer)",
+      "allowed_scopes": []
+    },
+    "network.outbound": {
+      "verb": "network",
+      "domain": "outbound",
+      "subsystem": "orbit_io::network (host function)",
+      "allowed_scopes": [
+        "host"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "network.unix-socket": {
+      "verb": "network",
+      "domain": "unix-socket",
+      "subsystem": "orbit_io::network (host function)",
+      "allowed_scopes": [
+        "path"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "network.listen": {
+      "verb": "network",
+      "domain": "listen",
+      "subsystem": "orbit_io::network (host function)",
+      "allowed_scopes": [
+        "port"
+      ],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "bus.publish": {
+      "verb": "bus",
+      "domain": "publish",
+      "subsystem": "orbit_plugin::bus",
+      "allowed_scopes": []
+    },
+    "bus.subscribe": {
+      "verb": "bus",
+      "domain": "subscribe",
+      "subsystem": "orbit_plugin::bus",
+      "allowed_scopes": [
+        "topic"
+      ],
+      "default_scope": {}
+    },
+    "config.read": {
+      "verb": "config",
+      "domain": "read",
+      "subsystem": "orbit_config::get",
+      "allowed_scopes": []
+    },
+    "config.write": {
+      "verb": "config",
+      "domain": "write",
+      "subsystem": "orbit_config::set",
+      "allowed_scopes": [],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "config.ui-show": {
+      "verb": "config",
+      "domain": "ui-show",
+      "subsystem": "orbit_plugin::config::show_ui",
+      "allowed_scopes": []
+    },
+    "runtime.sync-stream": {
+      "verb": "runtime",
+      "domain": "sync-stream",
+      "subsystem": "orbit_plugin::runtime (sync stream dispatch)",
+      "requires_runtime": "native",
+      "allowed_scopes": []
+    },
+    "runtime.unsafe-fs": {
+      "verb": "runtime",
+      "domain": "unsafe-fs",
+      "subsystem": "Plugin 任意 FS 访问",
+      "allowed_scopes": [],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "runtime.process-spawn": {
+      "verb": "runtime",
+      "domain": "process-spawn",
+      "subsystem": "Plugin fork 子进程",
+      "allowed_scopes": [],
+      "default_scope": null,
+      "explicit_user_consent": true
+    },
+    "runtime.native": {
+      "verb": "runtime",
+      "domain": "native",
+      "subsystem": "Native Plugin 标识",
+      "allowed_scopes": [],
+      "description": "Native Plugin 标识（决策 #6）"
+    }
+  }
+}
