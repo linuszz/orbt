@@ -2984,6 +2984,32 @@ async fn handle_mobile_mouse(
     }
 }
 
+/// Rect of the plugin dock in terminal coordinates, mirroring
+/// `tui::render` (plugin surfaces force the agent panel to Sidebar width).
+/// None when no plugin surface is visible.
+fn plugin_dock_area(app: &App, term_size: ratatui::layout::Rect) -> Option<ratatui::layout::Rect> {
+    if app.plugin_surfaces.is_empty() {
+        return None;
+    }
+    let sidebar_w: u16 = if term_size.width < 80 {
+        SIDEBAR_COLLAPSED_W
+    } else if app.sidebar_visible {
+        SIDEBAR_W
+    } else {
+        SIDEBAR_COLLAPSED_W
+    };
+    let agent_w = agent_panel_width(term_size.width, AgentPanelMode::Sidebar);
+    if agent_w == 0 || term_size.width <= sidebar_w + agent_w {
+        return None;
+    }
+    Some(ratatui::layout::Rect {
+        x: term_size.width - agent_w,
+        y: 0,
+        width: agent_w,
+        height: term_size.height.saturating_sub(1),
+    })
+}
+
 async fn handle_mouse(
     mouse: crossterm::event::MouseEvent,
     app: &mut App,
@@ -3008,6 +3034,28 @@ async fn handle_mouse(
 
     if app.settings_open {
         return;
+    }
+
+    if !app.plugin_surfaces.is_empty() {
+        if let Some(dock) = plugin_dock_area(app, term_size) {
+            let inside = mouse.column >= dock.x
+                && mouse.column < dock.x + dock.width
+                && mouse.row >= dock.y
+                && mouse.row < dock.y + dock.height;
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+                if inside && !app.plugin_dock_focused {
+                    app.plugin_dock_focused = true;
+                    app.needs_redraw = true;
+                    return;
+                }
+                if !inside && app.plugin_dock_focused {
+                    app.plugin_dock_focused = false;
+                    app.plugin_dock_input.clear();
+                    app.needs_redraw = true;
+                    return;
+                }
+            }
+        }
     }
 
     if let orbt_tui::app::InputMode::CommandPalette {

@@ -69,7 +69,11 @@ pub fn render(frame: &mut Frame, area: Rect, app: &App) {
     } else {
         Style::default().fg(fg_muted())
     };
-    let line = format!("> {}{}", app.plugin_dock_input, cursor);
+    let line = if app.plugin_dock_input.is_empty() && !app.plugin_dock_focused {
+        "> Ctrl+B P to focus".to_string()
+    } else {
+        format!("> {}{}", app.plugin_dock_input, cursor)
+    };
     frame.render_widget(Paragraph::new(line).style(style), input_area);
 
     if app.plugin_dock_focused && hint_h > 0 {
@@ -174,6 +178,41 @@ mod tests {
             .map(|x| buf[(x, 9)].symbol().to_string())
             .collect::<String>();
         assert!(!last_row.contains("PLUGIN DOCK"), "got: {}", last_row);
+    }
+
+    #[test]
+    fn unfocused_empty_input_shows_focus_hint() {
+        let mut app = crate::app::tests::make_test_app(80, 24);
+        app.plugin_surfaces.insert(
+            0,
+            PluginSurfaceFrame {
+                plugin_id: "p".to_string(),
+                width: 1,
+                height: 1,
+                cells: vec![Cell {
+                    ch: ' ',
+                    ..Cell::default()
+                }],
+            },
+        );
+        app.plugin_dock_focused = false;
+        app.plugin_dock_input.clear();
+
+        let backend = ratatui::backend::TestBackend::new(30, 10);
+        let mut terminal = ratatui::Terminal::new(backend).unwrap();
+        terminal
+            .draw(|f| render(f, Rect::new(0, 0, 30, 10), &app))
+            .unwrap();
+
+        let buf = terminal.backend().buffer();
+        let input_row = (0..30u16)
+            .map(|x| buf[(x, 8)].symbol().to_string())
+            .collect::<String>();
+        assert!(
+            input_row.contains("Ctrl+B P to focus"),
+            "got: {}",
+            input_row
+        );
     }
 
     #[test]
